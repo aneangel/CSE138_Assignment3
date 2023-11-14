@@ -1,10 +1,12 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, abort
 import requests
 
 
 app = Flask(__name__)
 
-view = set()
+view = []
+kvStore = {}
+vectorClock = [0] * (len(view) + 1)
 
 def broadcastAddReplica(currentAddress, newAddress):
     
@@ -71,7 +73,7 @@ def addReplica():
     if newAddress in view:
         return {"result", "already present"}, 200
     else:
-        view.add(newAddress)
+        view.append(newAddress)
         
         # Get current flask APP's IP:PORT
         ip = request.environ.get("HTTP_X_REAL_IP", request.remote_addr)
@@ -101,7 +103,58 @@ def deleteReplica():
     else:
         return {"error", "View has no such replica"}, 404
 
-    
+
+def validate_key_length(key):
+    if len(key) > 50:
+        abort(400, "Key is too long")
+
+def validate_key_exists(key):
+    if key not in kvStore:
+        abort(404, "Key does not exist")
+
+
+@app.route('/kvs/<key>', methods=['PUT'])
+def addKey(key):
+    validate_key_length(key=key)
+
+    data = request.get_json()
+    value = data['value']
+    causalMetadata = data['causal-metadata']
+
+    if key in kvStore:
+        kvStore[key] = value
+        return {'result': "replaced", "causal-metadata": "<V>"}, 200
+    else:
+        kvStore[key] = value
+        return {'result': 'created', 'causal-metadata': '<V>'}, 201
+
+
+
+
+
+@app.route('kvs/<key>', methods=['GET'])
+def getKey(key):
+    validate_key_exists(key=key)
+
+    data = request.get_json()
+    causalMetadata = data['causal-metadata']
+
+    return {'result': 'found', 'value': kvStore[key], 'causal-metadata': '<V>'}, 200
+
+
+
+
+
+@app.route('/kvs/<key>', methods=['DELETE'])
+def deleteKey(key):
+    validate_key_exists(key=key)
+
+    data = request.get_json()
+    causalMetadata = data['causal-metadata']
+
+    del kvStore[key]
+
+    return {'result': 'deleted', 'causal-metadata': '<V>'}
 
 
 
