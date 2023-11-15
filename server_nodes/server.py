@@ -49,3 +49,9 @@ class MultiMasterKeyValueStore:
         for node in set(clock1.keys()).union(clock2.keys()):
             merged_clock[node] = max(clock1.get(node, 0), clock2.get(node, 0))
         return merged_clock
+
+    def dependencies_satisfied(self, causal_metadata):
+        for node, version in causal_metadata.items():
+            if self.vector_clock[node] < version:
+                return False
+        return True
