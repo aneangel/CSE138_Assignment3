@@ -134,10 +134,10 @@ def broadCastPutKeyReplica(key, causalMetadata, value):
             url = f"http://{address}/kvs/addKeyToReplica/{key}"
             reqBody = {"value":value, "causal-metadata":causalMetadata}
 
+            # this is where we would need to implement the request that uses HTTP long-polling here
             response = requests.put(url, json=reqBody)
 
-            if response == 503:
-                 # this is where we would need to implement the HTTP long-polling
+
 
             
 
@@ -161,7 +161,8 @@ def addKeyToReplica(key):
             return {'result': 'created', 'causal-metadata': vectorClock}, 201
     
     else:
-        return {"error": "Causal dependencies not satisfied; try again later"}, 503
+        # implement http long-polling here 
+
 
 
 
