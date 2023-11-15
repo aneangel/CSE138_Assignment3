@@ -1,0 +1,36 @@
+version: '3'
+
+services:
+  alice:
+    image: asg3img
+    networks:
+      asg3net:
+        ipv4_address: 10.10.0.2
+    environment:
+      - SOCKET_ADDRESS=10.10.0.2:8090
+      - VIEW=10.10.0.2:8090,10.10.0.3:8090,10.10.0.4:8090 asg3img
+
+  bob:
+    image: asg3img
+    networks:
+      asg3net:
+        ipv4_address: 10.10.0.3
+    environment:
+      - SOCKET_ADDRESS=10.10.0.3:8090
+      - VIEW=10.10.0.2:8090,10.10.0.3:8090,10.10.0.4:8090 asg3img
+
+  carol:
+    image: asg3img
+    networks:
+      asg3net:
+        ipv4_address: 10.10.0.4
+    environment:
+      - SOCKET_ADDRESS=10.10.0.4:8090
+      - 10.10.0.2:8090,10.10.0.3:8090,10.10.0.4:8090 asg3img
+
+networks:
+  asg3net:
+      ipam:
+        driver: default
+        config:
+          - subnet: 10.10.0.0/16
