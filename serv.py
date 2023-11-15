@@ -53,8 +53,7 @@ def broadCastDeleteReplica(deletedAddress):
                 response.raise_for_status
 
             except requests.exceptions.RequestException as e:
-                    print(f"Error broadcasting to {address}: {e}")
-
+                return e
         
 
 
@@ -65,9 +64,9 @@ def addToReplicaView():
 
     if deletedAddress in view:
         view.remove(deletedAddress)
-        return {"result", "deleted"}, 200
+        return {"result":"deleted"}, 200
     else:
-        return {"error", "View has no such replica"}, 404
+        return {"error":"View has no such replica"}, 404
     
 
 @app.route('/addToReplicaView', methods=['DELETE'])
@@ -76,10 +75,10 @@ def deleteFromReplicaView():
     newAddress = data['socket-address']
 
     if newAddress in view:
-        return {"result", "already present"}, 200
+        return {"result":"already present"}, 200
     else:
         view.append(newAddress)
-        return {'result', 'added'}
+        return {'result':'added'}
 
 
 
@@ -89,19 +88,19 @@ def addReplica():
     newAddress = data['socket-address']
 
     if newAddress in view:
-        return {"result", "already present"}, 200
+        return {"result":"already present"}, 200
     else:
         view.append(newAddress)
 
         broadcastAddReplica(newAddress=newAddress)
 
-        return {"result", "added"}, 201
+        return {"result":"added"}, 201
 
 
 
 @app.route('/view', methods = ['GET'])
 def getReplica():
-    return {"view", view}, 200
+    return {"view": view}, 200
 
 
 @app.route("/view", methods = ['DELETE'])
@@ -112,9 +111,9 @@ def deleteReplica():
     if deletedAddress in view:
         view.remove(deletedAddress)
         broadCastDeleteReplica(deletedAddress=deletedAddress)
-        return {"result", "deleted"}, 200
+        return {"result":"deleted"}, 200
     else:
-        return {"error", "View has no such replica"}, 404
+        return {"error":"View has no such replica"}, 404
 
 
 def validate_key_length(key):
@@ -126,12 +125,43 @@ def validate_key_exists(key):
         abort(404, "Key does not exist")
 
 
-# this will be the new api to trigger HTTP long-polling for put key
-# @app.route('/putKey/longPoll/<causalMetadata>', methods=['PUT'])
-# def putKeyLongPoll(causalMetadata):
+
+def broadCastPutKeyReplica(key, causalMetadata, value):
+    for address in view:
+
+        if address != currentAddress:
+
+            url = f"http://{address}/kvs/addKeyToReplica/{key}"
+            reqBody = {"value":value, "causal-metadata":causalMetadata}
+
+            response = requests.put(url, json=reqBody)
+
+            if response == 503:
+                 # this is where we would need to implement the HTTP long-polling
+
+            
 
 
-# def broadCastPutKey(key, causalMetadata):
+@app.route('/kvs/addKeyToReplica/<key>')
+def addKeyToReplica(key):
+    data = request.get_json()
+    value = data['value']
+    causalMetadata = data['causal-metadata']
+
+    if Counter(vectorClock) == Counter(causalMetadata):
+        if key in kvStore:
+            kvStore[key] = value
+            vectorClock[currentAddress] += 1
+
+            return {'result': "replaced", "causal-metadata": vectorClock}, 200
+        else:
+            kvStore[key] = value
+            vectorClock[currentAddress] += 1
+
+            return {'result': 'created', 'causal-metadata': vectorClock}, 201
+    
+    else:
+        return {"error": "Causal dependencies not satisfied; try again later"}, 503
 
 
 
@@ -150,6 +180,7 @@ def addKey(key):
             vectorClock[currentAddress] += 1
 
             # Broadcast put to other replicas here
+            broadCastPutKeyReplica(key, causalMetadata=causalMetadata, value=value)
 
             return {'result': "replaced", "causal-metadata": vectorClock}, 200
         else:
@@ -157,19 +188,17 @@ def addKey(key):
             vectorClock[currentAddress] += 1
 
             # Broadcast put to other replicas here
+            broadCastPutKeyReplica(key, causalMetadata=causalMetadata, value=value)
 
             return {'result': 'created', 'causal-metadata': vectorClock}, 201
     
     else:
-        # this is where we would need to implement the HTTP long-polling
+        # will need to do some sort of long-polling here too and then once it's sorted, broadcast the request to other replicas
+
         return {"error": "Causal dependencies not satisfied; try again later"}, 503
 
 
 
-# async def waitForMatchingVectorClock(expectedVectorClock):
-#     while vectorClock != expectedVectorClock:
-#         await asyncio.sleep(0.1)  # Sleep to avoid busy-waiting
-#     vectorClockMatch.set()
 
 
 @app.route('kvs/<key>', methods=['GET'])
