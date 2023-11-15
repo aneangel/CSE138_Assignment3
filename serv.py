@@ -1,47 +1,31 @@
 from flask import Flask, request, jsonify, abort
 import requests
+import os
 
 
-app = Flask(__name__)
+app = Flask(__name__)\
 
-view = []
+# get environment variables
+viewEnv = os.environ.get('VIEW', '')
+view = viewEnv.split(',')
+currentAddress = os.environ.get('SOCKET_ADDRESS', '')
+
 kvStore = {}
 vectorClock = [0] * (len(view) + 1)
 
-def broadcastAddReplica(currentAddress, newAddress):
-    
-    # url for the new replica
-    urlNew = f"http://{newAddress}/view"
-
-    # the request body for adding the IP:PORT of the current Flask App to the new replica
-    reqBodyCurrent = {"socket-address":currentAddress}
-
-    # request body for adding the new replica's address to the existing replicas
-    reqBodyExisting = {"socket-address":newAddress}
-
-    # adding the IP:PORT of the current Flask APP to the new replica
-    try:
-        responseNew = requests.put(urlNew, json=reqBodyCurrent)
-        responseNew.raise_for_status()
-
-    except requests.exceptions.RequestException as e:
-
-        print(f"Error broadcasting to {address}: {e}")
+def broadcastAddReplica(newAddress):
 
     # broadcasting the request to add the new replica IP:PORT to all the other existing replicas' view 
-    # and adding the existing replicas' IP:PORT to the new replica's view
     for address in view:
 
-        if address != newAddress:
+        if address != newAddress or address != currentAddress:
 
             urlExisting = f"http://{address}/view"
-            reqBodyNew = {"socket-address":address}
+            reqBodyExisting = {"socket-address":newAddress}
 
             try:
                 responseExisting = requests.put(urlExisting, json=reqBodyExisting)
-                responseNew = requests.put(urlNew, json=reqBodyNew)
                 responseExisting.raise_for_status()
-                responseNew.raise_for_status()
 
             except requests.exceptions.RequestException as e:
                 print(f"Error broadcasting to {address}: {e}")
@@ -51,15 +35,16 @@ def broadCastDeleteReplica(deletedAddress):
 
     # broadcasting the request for deleting an IP:PORT from all the replicas' view storage
     for address in view:
-        url = f"http://{address}/view"
-        reqBody = {"socket-address":deletedAddress}
+        if address != currentAddress:
+            url = f"http://{address}/view"
+            reqBody = {"socket-address":deletedAddress}
 
-        try:
-            response = requests.delete(url, json=reqBody)
-            response.raise_for_status
+            try:
+                response = requests.delete(url, json=reqBody)
+                response.raise_for_status
 
-        except requests.exceptions.RequestException as e:
-                print(f"Error broadcasting to {address}: {e}")
+            except requests.exceptions.RequestException as e:
+                    print(f"Error broadcasting to {address}: {e}")
 
         
 
@@ -74,13 +59,8 @@ def addReplica():
         return {"result", "already present"}, 200
     else:
         view.append(newAddress)
-        
-        # Get current flask APP's IP:PORT
-        ip = request.environ.get("HTTP_X_REAL_IP", request.remote_addr)
-        port = request.environ["SERVER_PORT"]
-        currentAddress = {ip:port}
 
-        broadcastAddReplica(currentAddress=currentAddress, newAddress=newAddress)
+        broadcastAddReplica(newAddress=newAddress)
         return {"result", "added"}, 201
 
 
