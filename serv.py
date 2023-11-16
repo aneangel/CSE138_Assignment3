@@ -2,7 +2,8 @@ from flask import Flask, request, jsonify, abort
 import requests
 import os
 from collections import defaultdict, Counter
-import asyncio
+import time
+
 
 app = Flask(__name__)\
 
@@ -19,10 +20,9 @@ vectorClock = defaultdict(int)
 for v in view:
     vectorClock[v]
 
-# vectorClockMatch = asyncio.Event()
-
 
 def broadcastAddReplica(newAddress):
+    global currentAddress, view
 
     # broadcasting the request to add the new replica IP:PORT to all the other existing replicas' view 
     for address in view:
@@ -41,6 +41,7 @@ def broadcastAddReplica(newAddress):
 
 
 def broadCastDeleteReplica(deletedAddress):
+    global currentAddress, view
 
     # broadcasting the request for deleting an IP:PORT from all the replicas' view storage
     for address in view:
@@ -59,6 +60,8 @@ def broadCastDeleteReplica(deletedAddress):
 
 @app.route('/deleteFromReplicaView', methods=['PUT'])
 def addToReplicaView():
+    global view
+
     data = request.get_json()
     deletedAddress = data['socket-address']
 
@@ -71,6 +74,8 @@ def addToReplicaView():
 
 @app.route('/addToReplicaView', methods=['DELETE'])
 def deleteFromReplicaView():
+    global view
+
     data = request.get_json()
     newAddress = data['socket-address']
 
@@ -100,11 +105,15 @@ def addReplica():
 
 @app.route('/view', methods = ['GET'])
 def getReplica():
+    global view
+
     return {"view": view}, 200
 
 
 @app.route("/view", methods = ['DELETE'])
 def deleteReplica():
+    global view
+
     data = request.get_json()
     deletedAddress = data['socket-address']
 
@@ -121,12 +130,16 @@ def validate_key_length(key):
         abort(400, "Key is too long")
 
 def validate_key_exists(key):
+    global kvStore
+
     if key not in kvStore:
         abort(404, "Key does not exist")
 
 
 
 def broadCastPutKeyReplica(key, causalMetadata, value):
+    global currentAddress, view
+
     for address in view:
 
         if address != currentAddress:
@@ -135,47 +148,46 @@ def broadCastPutKeyReplica(key, causalMetadata, value):
             reqBody = {"value":value, "causal-metadata":causalMetadata}
 
             # this is where we would need to implement the request that uses HTTP long-polling here
-            response = requests.put(url, json=reqBody)
-
-
-
+            requests.put(url, json=reqBody)
             
 
 
 @app.route('/kvs/addKeyToReplica/<key>')
 def addKeyToReplica(key):
+    global currentAddress, kvStore, vectorClock
+
     data = request.get_json()
     value = data['value']
     causalMetadata = data['causal-metadata']
 
-    if Counter(vectorClock) == Counter(causalMetadata):
-        if key in kvStore:
-            kvStore[key] = value
-            vectorClock[currentAddress] += 1
+    # responsible for the HTTP long-polling
+    while Counter(vectorClock) != Counter(causalMetadata):
+        time.sleep(1)
 
-            return {'result': "replaced", "causal-metadata": vectorClock}, 200
-        else:
-            kvStore[key] = value
-            vectorClock[currentAddress] += 1
+    if key in kvStore:
+        kvStore[key] = value
+        vectorClock[currentAddress] += 1
 
-            return {'result': 'created', 'causal-metadata': vectorClock}, 201
-    
+        return {'result': "replaced", "causal-metadata": vectorClock}, 200
     else:
-        # implement http long-polling here 
+        kvStore[key] = value
+        vectorClock[currentAddress] += 1
 
-
+        return {'result': 'created', 'causal-metadata': vectorClock}, 201
 
 
 
 @app.route('/kvs/<key>', methods=['PUT'])
 def addKey(key):
+    global currentAddress, kvStore, vectorClock
+
     validate_key_length(key=key)
 
     data = request.get_json()
     value = data['value']
     causalMetadata = data['causal-metadata']
 
-    if Counter(vectorClock) == Counter(causalMetadata):
+    if Counter(vectorClock) == Counter(causalMetadata) or causalMetadata == None:
         if key in kvStore:
             kvStore[key] = value
             vectorClock[currentAddress] += 1
@@ -194,41 +206,81 @@ def addKey(key):
             return {'result': 'created', 'causal-metadata': vectorClock}, 201
     
     else:
-        # will need to do some sort of long-polling here too and then once it's sorted, broadcast the request to other replicas
-
         return {"error": "Causal dependencies not satisfied; try again later"}, 503
-
-
 
 
 
 @app.route('kvs/<key>', methods=['GET'])
 def getKey(key):
+    global kvStore, vectorClock
+
     validate_key_exists(key=key)
 
     data = request.get_json()
     causalMetadata = data['causal-metadata']
 
-    if Counter(vectorClock) == Counter(causalMetadata):
+    if Counter(vectorClock) == Counter(causalMetadata) or causalMetadata == None:
         return {'result': 'found', 'value': kvStore[key], 'causal-metadata': vectorClock}, 200
     
-    # else:
+    else:
+        return {"error": "Causal dependencies not satisfied; try again later"}, 503
+ 
+
+def broadcastDelKeyReplica(key, causalMetadata):
+    global currentAddress, view
+
+    for address in view:
+
+        if address != currentAddress:
+
+            url = f"http://{address}/kvs/delKeyFromReplica/{key}"
+            reqBody = {"causal-metadata":causalMetadata}
+
+            # this is where we would need to implement the request that uses HTTP long-polling here
+            requests.delete(url, json=reqBody)
 
 
+@app.route('/kvs/delKeyFromReplica/<key>')
+def delKeyFromReplica(key):
+    global currentAddress, kvStore, vectorClock
 
+    data = request.get_json()
+    causalMetadata = data['causal-metadata']
+
+    # responsible for the HTTP long-polling
+    while Counter(vectorClock) != Counter(causalMetadata):
+        time.sleep(1)
+
+    validate_key_exists(key=key)
+
+    del kvStore[key]
+    vectorClock[currentAddress] += 1
+
+    return {'result': 'deleted', 'causal-metadata': vectorClock}
 
 
 
 @app.route('/kvs/<key>', methods=['DELETE'])
 def deleteKey(key):
+    global kvStore, currentAddress, vectorClock
+
     validate_key_exists(key=key)
 
     data = request.get_json()
     causalMetadata = data['causal-metadata']
 
-    del kvStore[key]
+    if Counter(vectorClock) == Counter(causalMetadata) or causalMetadata == None:
 
-    return {'result': 'deleted', 'causal-metadata': '<V>'}
+        del kvStore[key]
+        vectorClock[currentAddress] += 1
+
+        # broadcast del to other replicas here
+        broadcastDelKeyReplica(key=key, causalMetadata=causalMetadata)
+
+        return {'result': 'deleted', 'causal-metadata': vectorClock}
+    
+    else:
+        return {"error": "Causal dependencies not satisfied; try again later"}, 503
 
 
 
