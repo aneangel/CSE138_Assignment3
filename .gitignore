@@ -1,3 +1,6 @@
 test/
 / .idea/
 / .DS_Store
+/ __pycahe__/
+
+test_assignment3.py

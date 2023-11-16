@@ -50,7 +50,7 @@ def broadCastDeleteReplica(deletedAddress):
 
             try:
                 response = requests.delete(url, json=reqBody)
-                response.raise_for_status
+                response.raise_for_status()
 
             except requests.exceptions.RequestException as e:
                 return e
@@ -233,7 +233,7 @@ def addKey(key):
         return {"error": "Causal dependencies not satisfied; try again later"}, 503
 
 
-@app.route('kvs/<key>', methods=['GET'])
+@app.route('/kvs/<key>', methods=['GET'])
 def getKey(key):
     validate_key_exists(key=key)
 
@@ -259,4 +259,6 @@ def deleteKey(key):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    print(int(currentAddress.split(':')[1]))
+    print(currentAddress.split(':')[0])
+    app.run(debug=True, port=int(currentAddress.split(':')[1]), host=currentAddress.split(':')[0])
