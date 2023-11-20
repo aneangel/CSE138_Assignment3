@@ -18,7 +18,7 @@ kvStore = {}
 # Initialize Vector Clock
 vectorClock = defaultdict(int)
 for v in view:
-    vectorClock[v]
+    vectorClock[v] = 0
 
 
 # vectorClockMatch = asyncio.Event()
@@ -123,14 +123,21 @@ def validate_key_exists(key):
         abort(404, "Key does not exist")
 
 
-def broadCastPutKeyReplica(key, causalMetadata, value):
+def broadCastPutKeyReplica(key, value, causalMetadata):
     for address in view:
 
         if address != currentAddress:
-            url = f"http://{address}/kvs/addKeyToReplica/{key}"
-            reqBody = {"value": value, "causal-metadata": causalMetadata}
+            url = f"http://{address}/kvs/updateVectorClock"
+            reqBody = {"key": key, "value": value, "causalMetadata": causalMetadata}
 
-            # Set a timeout value for the long-polling request
+            # try:
+            #     response = requests.put(url, json=reqBody)
+            #     response.raise_for_status()
+            #
+            # except requests.exceptions.RequestException as e:
+            #     print(f"Error updating vector clock at Replica {address}: {e}")
+
+            # Set a timeout value for the long-polling rquest
             timeout = 30  # We can adjust later
 
             try:
@@ -138,18 +145,21 @@ def broadCastPutKeyReplica(key, causalMetadata, value):
                 while True:
                     response = requests.put(url, json=reqBody, timeout=timeout)
 
-                    if response.status_code == 200:
+                    if response.status_code == 200 or response.status_code == 201:
                         # Process the response as needed
                         print(f"Replica {address} successfully updated.")
+                        vectorClock[address] += 1
                         break  # Exit the loop when a successful response is received
-                    elif response.status_code == 204:
-                        # No updates, continue long-polling
-                        print(f"No updates from Replica {address}. Continuing long-polling.")
-                        time.sleep(1)
+                    # elif response.status_code == 204:
+                    #     # No updates, continue long-polling
+                    #     print(f"No updates from Replica {address}. Continuing long-polling.")
+                    #     time.sleep(1)
                     else:
                         # Handle other status codes if necessary
                         print(f"Error updating Replica {address}. Status code: {response.status_code}")
-                        break  # Exit the loop on error
+                        # break # getting rid of this break makes code run forever, but keeping it here I don't think
+                        continue
+                        # adds to the
 
             except requests.Timeout:
                 # Handle timeout and continue long-polling
@@ -159,11 +169,24 @@ def broadCastPutKeyReplica(key, causalMetadata, value):
                 print(f"Error: {e}")
 
 
-@app.route('/kvs/addKeyToReplica/<key>')
-def addKeyToReplica(key):
+# @app.route('/updateVectorClock', methods=['PUT'])
+# def updateVectorClock():
+#     data = request.get_json()
+#     updatedVectorClock = data['vector-clock']
+#
+#     # Update the local vector clock with the received vector clock
+#     vectorClock.update(updatedVectorClock)
+#
+#     return {"result": "updated"}, 200
+
+@app.route('/kvs/updateVectorClock', methods=['PUT'])
+def addKeyToReplica():
+    global currentAddress, kvStore, vectorClock
+
     data = request.get_json()
+    key = data['key']
     value = data['value']
-    causalMetadata = data['causal-metadata']
+    causalMetadata = data['causalMetadata']
 
     if Counter(vectorClock) == Counter(causalMetadata):
         if key in kvStore:
@@ -178,9 +201,9 @@ def addKeyToReplica(key):
             return {'result': 'created', 'causal-metadata': vectorClock}, 201
 
     else:
-        pass
+        return {"error": "invalid metadata"}, 503
 
-        # implement http long-polling here 
+    #     # implement http long-polling here
 
 
 @app.route('/kvs/<key>', methods=['PUT'])
@@ -197,7 +220,7 @@ def addKey(key):
             vectorClock[currentAddress] += 1
 
             # Broadcast put to other replicas here
-            broadCastPutKeyReplica(key, causalMetadata=causalMetadata, value=value)
+            broadCastPutKeyReplica(key, value, causalMetadata)
 
             return {'result': "replaced", "causal-metadata": vectorClock}, 200
         else:
@@ -205,29 +228,29 @@ def addKey(key):
             vectorClock[currentAddress] += 1
 
             # Broadcast put to other replicas here
-            broadCastPutKeyReplica(key, causalMetadata=causalMetadata, value=value)
+            broadCastPutKeyReplica(key, value, causalMetadata)
 
             return {'result': 'created', 'causal-metadata': vectorClock}, 201
 
     else:
-        timeout = 30  # timeout value
-        start_time = time.time()
-
-        while time.time() - start_time < timeout:
-            time.sleep(1)  # delay before the next long-polling attempt
-
-            if Counter(vectorClock) == Counter(causalMetadata):
-                # If vector clocks match, then proceed with the update
-                if key in kvStore:
-                    kvStore[key] = value
-                    vectorClock[currentAddress] += 1
-
-                    return {'result': "replaced", "causal-metadata": vectorClock}, 200
-                else:
-                    kvStore[key] = value
-                    vectorClock[currentAddress] += 1
-
-                    return {'result': 'created', 'causal-metadata': vectorClock}, 201
+        # timeout = 30  # timeout value
+        # start_time = time.time()
+        #
+        # while time.time() - start_time < timeout:
+        #     time.sleep(1)  # delay before the next long-polling attempt
+        #
+        #     if Counter(vectorClock) == Counter(causalMetadata):
+        #         # If vector clocks match, then proceed with the update
+        #         if key in kvStore:
+        #             kvStore[key] = value
+        #             vectorClock[currentAddress] += 1
+        #
+        #             return {'result': "replaced", "causal-metadata": vectorClock}, 200
+        #         else:
+        #             kvStore[key] = value
+        #             vectorClock[currentAddress] += 1
+        #
+        #             return {'result': 'created', 'causal-metadata': vectorClock}, 201
 
         # If the timeout is reached and vector clocks still don't match, return an error
         return {"error": "Causal dependencies not satisfied; try again later"}, 503
@@ -235,15 +258,18 @@ def addKey(key):
 
 @app.route('/kvs/<key>', methods=['GET'])
 def getKey(key):
-    validate_key_exists(key=key)
+    global kvStore, vectorClock
+
+    # validate_key_exists(key=key)
 
     data = request.get_json()
     causalMetadata = data['causal-metadata']
 
-    if Counter(vectorClock) == Counter(causalMetadata):
+    if Counter(vectorClock) == Counter(causalMetadata) or causalMetadata is None:
         return {'result': 'found', 'value': kvStore[key], 'causal-metadata': vectorClock}, 200
 
-    # else:
+    else:
+        return {"error": "Causal dependencies not satisfied; try again later", "vector clock": vectorClock}, 503
 
 
 @app.route('/kvs/<key>', methods=['DELETE'])
