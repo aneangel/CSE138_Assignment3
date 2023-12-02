@@ -8,18 +8,18 @@ import asyncio
 app = Flask(__name__)
 
 # get environment variables
-viewEnv = os.environ.get('VIEW', '')
-view = viewEnv.split(',')
-currentAddress = os.environ.get('SOCKET_ADDRESS', '')
+VIEW_ENV = os.environ.get('VIEW', '')
+VIEW = VIEW_ENV.split(',')
+CURRENT_ADDRESS = os.environ.get('SOCKET_ADDRESS', '')
 
 # Initialize KV Store
-kvStore = {}
+KV_STORE = {}
 
 # Initialize Vector Clock
-vectorClock = defaultdict(int)
+VECTOR_CLOCK = defaultdict(int)
 
 
-# vectorClockMatch = asyncio.Event()
+# VECTOR_CLOCKMatch = asyncio.Event()
 
 
 # Helper Functions
@@ -31,8 +31,8 @@ def broadcastAddReplica(newAddress):
     Keyword arguments:
     newAddress -- the IP:PORT of the new replica to be added
     """
-    for address in view:
-        if address == newAddress or address == currentAddress:
+    for address in VIEW:
+        if address == newAddress or address == CURRENT_ADDRESS:
             return
 
         urlExisting = f"http://{address}/addToReplicaView"
@@ -55,8 +55,8 @@ def broadCastDeleteReplica(deletedAddress):
     Keyword arguments:
     deletedAddress -- the IP:PORT of the replica to be deleted
     """
-    for address in view:
-        if address == currentAddress:
+    for address in VIEW:
+        if address == CURRENT_ADDRESS:
             return
 
         url = f"http://{address}/deleteFromReplicaView"
@@ -88,7 +88,7 @@ def validate_key_exists(key):
     Keyword arguments:
     key -- the key to be validated
     """
-    if key not in kvStore:
+    if key not in KV_STORE:
         abort(404, "Key does not exist")
 
 
@@ -101,8 +101,8 @@ def broadCastPutKeyReplica(key, value, causalMetadata):
     value -- the value to be added
     causalMetadata -- the causal metadata to be broadcasted
     """
-    for address in view:
-        if address == currentAddress:
+    for address in VIEW:
+        if address == CURRENT_ADDRESS:
             return
 
         url = f"http://{address}/kvs/updateVectorClock"
@@ -127,7 +127,7 @@ def broadCastPutKeyReplica(key, value, causalMetadata):
                 if response.status_code == 200 or response.status_code == 201:
                     # Process the response as needed
                     print(f"Replica {address} successfully updated.")
-                    vectorClock[address] += 1
+                    VECTOR_CLOCK[address] += 1
                     break  # Exit the loop when a successful response is received
                 # elif response.status_code == 204:
                 #     # No updates, continue long-polling
@@ -156,8 +156,8 @@ def deleteFromReplicaView():
     data = request.get_json()
     deletedAddress = data['socket-address']
 
-    if deletedAddress in view:
-        view.remove(deletedAddress)
+    if deletedAddress in VIEW:
+        VIEW.remove(deletedAddress)
         return {"result": "deleted"}, 200
 
     return {"error": "View has no such replica"}, 404
@@ -168,34 +168,32 @@ def addToReplicaView():
     data = request.get_json()
     newAddress = data['socket-address']
 
-    if newAddress in view:
+    if newAddress in VIEW:
         return {"result": "already present"}, 200
 
-    view.append(newAddress)
+    VIEW.append(newAddress)
     return {'result': 'added'}
 
 
 # Helper route
 @app.route('/kvs/updateVectorClock', methods=['PUT'])
 def addKeyToReplica():
-    global currentAddress, kvStore, vectorClock
-
     data = request.get_json()
     key = data['key']
     value = data['value']
     causalMetadata = data['causalMetadata']
 
-    if Counter(vectorClock) == Counter(causalMetadata):
-        if key in kvStore:
-            kvStore[key] = value
-            vectorClock[currentAddress] += 1
+    if Counter(VECTOR_CLOCK) == Counter(causalMetadata):
+        if key in KV_STORE:
+            KV_STORE[key] = value
+            VECTOR_CLOCK[CURRENT_ADDRESS] += 1
 
-            return {'result': "replaced", "causal-metadata": vectorClock}, 200
+            return {'result': "replaced", "causal-metadata": VECTOR_CLOCK}, 200
 
-        kvStore[key] = value
-        vectorClock[currentAddress] += 1
+        KV_STORE[key] = value
+        VECTOR_CLOCK[CURRENT_ADDRESS] += 1
 
-        return {'result': 'created', 'causal-metadata': vectorClock}, 201
+        return {'result': 'created', 'causal-metadata': VECTOR_CLOCK}, 201
 
     return {"error": "invalid metadata"}, 503
 
@@ -209,10 +207,10 @@ def addReplica():
     data = request.get_json()
     newAddress = data['socket-address']
 
-    if newAddress in view:
+    if newAddress in VIEW:
         return {"result": "already present"}, 200
 
-    view.append(newAddress)
+    VIEW.append(newAddress)
 
     broadcastAddReplica(newAddress=newAddress)
 
@@ -222,7 +220,7 @@ def addReplica():
 @app.route('/view', methods=['GET'])
 def getReplica():
     """Retrieve the view from a replica"""
-    return {"view": view}, 200
+    return {"view": VIEW}, 200
 
 
 @app.route("/view", methods=['DELETE'])
@@ -231,8 +229,8 @@ def deleteReplica():
     data = request.get_json()
     deletedAddress = data['socket-address']
 
-    if deletedAddress in view:
-        view.remove(deletedAddress)
+    if deletedAddress in VIEW:
+        VIEW.remove(deletedAddress)
         broadCastDeleteReplica(deletedAddress=deletedAddress)
         return {"result": "deleted"}, 200
 
@@ -247,23 +245,23 @@ def addKey(key):
     value = data['value']
     causalMetadata = data['causal-metadata']
 
-    if Counter(vectorClock) == Counter(causalMetadata):
-        if key in kvStore:
-            kvStore[key] = value
-            vectorClock[currentAddress] += 1
+    if Counter(VECTOR_CLOCK) == Counter(causalMetadata):
+        if key in KV_STORE:
+            KV_STORE[key] = value
+            VECTOR_CLOCK[CURRENT_ADDRESS] += 1
 
             # Broadcast put to other replicas here
             broadCastPutKeyReplica(key, value, causalMetadata)
 
-            return {'result': "replaced", "causal-metadata": vectorClock}, 200
+            return {'result': "replaced", "causal-metadata": VECTOR_CLOCK}, 200
 
-        kvStore[key] = value
-        vectorClock[currentAddress] += 1
+        KV_STORE[key] = value
+        VECTOR_CLOCK[CURRENT_ADDRESS] += 1
 
         # Broadcast put to other replicas here
         broadCastPutKeyReplica(key, value, causalMetadata)
 
-        return {'result': 'created', 'causal-metadata': vectorClock}, 201
+        return {'result': 'created', 'causal-metadata': VECTOR_CLOCK}, 201
 
         # timeout = 30  # timeout value
         # start_time = time.time()
@@ -271,18 +269,18 @@ def addKey(key):
         # while time.time() - start_time < timeout:
         #     time.sleep(1)  # delay before the next long-polling attempt
         #
-        #     if Counter(vectorClock) == Counter(causalMetadata):
+        #     if Counter(VECTOR_CLOCK) == Counter(causalMetadata):
         #         # If vector clocks match, then proceed with the update
-        #         if key in kvStore:
-        #             kvStore[key] = value
-        #             vectorClock[currentAddress] += 1
+        #         if key in KV_STORE:
+        #             KV_STORE[key] = value
+        #             VECTOR_CLOCK[CURRENT_ADDRESS] += 1
         #
-        #             return {'result': "replaced", "causal-metadata": vectorClock}, 200
+        #             return {'result': "replaced", "causal-metadata": VECTOR_CLOCK}, 200
         #         else:
-        #             kvStore[key] = value
-        #             vectorClock[currentAddress] += 1
+        #             KV_STORE[key] = value
+        #             VECTOR_CLOCK[CURRENT_ADDRESS] += 1
         #
-        #             return {'result': 'created', 'causal-metadata': vectorClock}, 201
+        #             return {'result': 'created', 'causal-metadata': VECTOR_CLOCK}, 201
 
         # If the timeout is reached and vector clocks still don't match, return an error
     return {"error": "Causal dependencies not satisfied; try again later"}, 503
@@ -290,17 +288,17 @@ def addKey(key):
 
 @app.route('/kvs/<key>', methods=['GET'])
 def getKey(key):
-    global kvStore, vectorClock
+    global KV_STORE, VECTOR_CLOCK
 
     # validate_key_exists(key=key)
 
     data = request.get_json()
     causalMetadata = data['causal-metadata']
 
-    if Counter(vectorClock) == Counter(causalMetadata) or causalMetadata is None:
-        return {'result': 'found', 'value': kvStore[key], 'causal-metadata': vectorClock}, 200
+    if Counter(VECTOR_CLOCK) == Counter(causalMetadata) or causalMetadata is None:
+        return {'result': 'found', 'value': KV_STORE[key], 'causal-metadata': VECTOR_CLOCK}, 200
 
-    return {"error": "Causal dependencies not satisfied; try again later", "vector clock": vectorClock}, 503
+    return {"error": "Causal dependencies not satisfied; try again later", "vector clock": VECTOR_CLOCK}, 503
 
 
 @app.route('/kvs/<key>', methods=['DELETE'])
@@ -310,14 +308,14 @@ def deleteKey(key):
     data = request.get_json()
     causalMetadata = data['causal-metadata']
 
-    del kvStore[key]
+    del KV_STORE[key]
 
     return {'result': 'deleted', 'causal-metadata': '<V>'}
 
 
 # Main
 if __name__ == '__main__':
-    print(int(currentAddress.split(':')[1]))
-    print(currentAddress.split(':')[0])
-    app.run(debug=True, port=int(currentAddress.split(
-        ':')[1]), host=currentAddress.split(':')[0])
+    print(int(CURRENT_ADDRESS.split(':')[1]))
+    print(CURRENT_ADDRESS.split(':')[0])
+    app.run(debug=True, port=int(CURRENT_ADDRESS.split(
+        ':')[1]), host=CURRENT_ADDRESS.split(':')[0])
