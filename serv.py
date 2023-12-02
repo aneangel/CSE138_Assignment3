@@ -7,19 +7,45 @@ import asyncio
 
 app = Flask(__name__)
 
-# get environment variables
+# Get environment variables
 VIEW_ENV = os.environ.get('VIEW', '')
 VIEW = VIEW_ENV.split(',')
 CURRENT_ADDRESS = os.environ.get('SOCKET_ADDRESS', '')
 
-# Initialize KV Store
+# Initialize global state
 KV_STORE = {}
-
-# Initialize Vector Clock
 VECTOR_CLOCK = defaultdict(int)
 
 
 # VECTOR_CLOCKMatch = asyncio.Event()
+
+
+# Error Handling
+@app.errorhandler(Exception)
+def handle_exception(error):
+    return {'error': error.description}, error.code
+
+
+def validate_key_length(key):
+    """
+    Validates the length of the key.
+
+    Keyword arguments:
+    key -- the key to be validated
+    """
+    if len(key) > 50:
+        abort(400, "Key is too long")
+
+
+def validate_key_exists(key):
+    """
+    Validates that the key exists in the KV Store.
+
+    Keyword arguments:
+    key -- the key to be validated
+    """
+    if key not in KV_STORE:
+        abort(404, "Key does not exist")
 
 
 # Helper Functions
@@ -68,28 +94,6 @@ def broadCastDeleteReplica(deletedAddress):
 
         except requests.exceptions.RequestException as e:
             return e
-
-
-def validate_key_length(key):
-    """
-    Validates the length of the key.
-
-    Keyword arguments:
-    key -- the key to be validated
-    """
-    if len(key) > 50:
-        abort(400, "Key is too long")
-
-
-def validate_key_exists(key):
-    """
-    Validates that the key exists in the KV Store.
-
-    Keyword arguments:
-    key -- the key to be validated
-    """
-    if key not in KV_STORE:
-        abort(404, "Key does not exist")
 
 
 def broadCastPutKeyReplica(key, value, causalMetadata):
@@ -150,7 +154,7 @@ def broadCastPutKeyReplica(key, value, causalMetadata):
             print(f"Error: {e}")
 
 
-# DEUBG Routes
+# Helper routes
 @app.route('/deleteFromReplicaView', methods=['PUT'])
 def deleteFromReplicaView():
     data = request.get_json()
@@ -175,7 +179,6 @@ def addToReplicaView():
     return {'result': 'added'}
 
 
-# Helper route
 @app.route('/kvs/updateVectorClock', methods=['PUT'])
 def addKeyToReplica():
     data = request.get_json()
@@ -197,7 +200,7 @@ def addKeyToReplica():
 
     return {"error": "invalid metadata"}, 503
 
-    #     # implement http long-polling here
+    # implement http long-polling here
 
 
 # View Operations
@@ -237,9 +240,10 @@ def deleteReplica():
     return {"error": "View has no such replica"}, 404
 
 
+# Key-Value Store Operations
 @app.route('/kvs/<key>', methods=['PUT'])
 def addKey(key):
-    validate_key_length(key=key)
+    validate_key_length(key)
 
     data = request.get_json()
     value = data['value']
@@ -250,7 +254,6 @@ def addKey(key):
             KV_STORE[key] = value
             VECTOR_CLOCK[CURRENT_ADDRESS] += 1
 
-            # Broadcast put to other replicas here
             broadCastPutKeyReplica(key, value, causalMetadata)
 
             return {'result': "replaced", "causal-metadata": VECTOR_CLOCK}, 200
@@ -258,7 +261,6 @@ def addKey(key):
         KV_STORE[key] = value
         VECTOR_CLOCK[CURRENT_ADDRESS] += 1
 
-        # Broadcast put to other replicas here
         broadCastPutKeyReplica(key, value, causalMetadata)
 
         return {'result': 'created', 'causal-metadata': VECTOR_CLOCK}, 201
@@ -288,9 +290,7 @@ def addKey(key):
 
 @app.route('/kvs/<key>', methods=['GET'])
 def getKey(key):
-    global KV_STORE, VECTOR_CLOCK
-
-    # validate_key_exists(key=key)
+    validate_key_exists(key)
 
     data = request.get_json()
     causalMetadata = data['causal-metadata']
@@ -303,7 +303,7 @@ def getKey(key):
 
 @app.route('/kvs/<key>', methods=['DELETE'])
 def deleteKey(key):
-    validate_key_exists(key=key)
+    validate_key_exists(key)
 
     data = request.get_json()
     causalMetadata = data['causal-metadata']
