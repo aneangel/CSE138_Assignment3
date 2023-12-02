@@ -24,43 +24,54 @@ vectorClock = defaultdict(int)
 
 # Helper Functions
 def broadcastAddReplica(newAddress):
-    """Broadcasting the request to add the new replica IP:PORT to all the other
-    existing replicas' view"""
+    """
+    Broadcast the request to add the new replica IP:PORT to all the other
+    existing replicas' view.
 
+    Keyword arguments:
+    newAddress -- the IP:PORT of the new replica to be added
+    """
     for address in view:
+        if address == newAddress or address == currentAddress:
+            return
 
-        if address != newAddress and address != currentAddress:
+        urlExisting = f"http://{address}/addToReplicaView"
+        reqBodyExisting = {"socket-address": newAddress}
 
-            urlExisting = f"http://{address}/addToReplicaView"
-            reqBodyExisting = {"socket-address": newAddress}
+        try:
+            responseExisting = requests.put(
+                urlExisting, json=reqBodyExisting)
+            responseExisting.raise_for_status()
 
-            try:
-                responseExisting = requests.put(
-                    urlExisting, json=reqBodyExisting)
-                responseExisting.raise_for_status()
-
-            except requests.exceptions.RequestException as e:
-                return e
+        except requests.exceptions.RequestException as e:
+            return e
 
 
 def broadCastDeleteReplica(deletedAddress):
-    """broadcasting the request for deleting an IP:PORT from all the replicas'
-    view storage"""
+    """
+    Broadcast the request for deleting an IP:PORT from all the replicas'
+    view storage.
 
+    Keyword arguments:
+    deletedAddress -- the IP:PORT of the replica to be deleted
+    """
     for address in view:
-        if address != currentAddress:
-            url = f"http://{address}/deleteFromReplicaView"
-            reqBody = {"socket-address": deletedAddress}
+        if address == currentAddress:
+            return
 
-            try:
-                response = requests.delete(url, json=reqBody)
-                response.raise_for_status()
+        url = f"http://{address}/deleteFromReplicaView"
+        reqBody = {"socket-address": deletedAddress}
 
-            except requests.exceptions.RequestException as e:
-                return e
+        try:
+            response = requests.delete(url, json=reqBody)
+            response.raise_for_status()
+
+        except requests.exceptions.RequestException as e:
+            return e
 
 
 def validate_key_length(key):
+    """Validates the length of the key"""
     if len(key) > 50:
         abort(400, "Key is too long")
 
@@ -72,51 +83,52 @@ def validate_key_exists(key):
 
 def broadCastPutKeyReplica(key, value, causalMetadata):
     for address in view:
+        if address == currentAddress:
+            return
 
-        if address != currentAddress:
-            url = f"http://{address}/kvs/updateVectorClock"
-            reqBody = {"key": key, "value": value,
-                       "causalMetadata": causalMetadata}
+        url = f"http://{address}/kvs/updateVectorClock"
+        reqBody = {"key": key, "value": value,
+                   "causalMetadata": causalMetadata}
 
-            # try:
-            #     response = requests.put(url, json=reqBody)
-            #     response.raise_for_status()
-            #
-            # except requests.exceptions.RequestException as e:
-            #     print(f"Error updating vector clock at Replica {address}: {e}")
+        # try:
+        #     response = requests.put(url, json=reqBody)
+        #     response.raise_for_status()
+        #
+        # except requests.exceptions.RequestException as e:
+        #     print(f"Error updating vector clock at Replica {address}: {e}")
 
-            # Set a timeout value for the long-polling rquest
-            timeout = 30  # We can adjust later
+        # Set a timeout value for the long-polling rquest
+        timeout = 30  # We can adjust later
 
-            try:
-                # Using a while loop to repeatedly make long-polling requests until a response is received
-                while True:
-                    response = requests.put(url, json=reqBody, timeout=timeout)
+        try:
+            # Using a while loop to repeatedly make long-polling requests until a response is received
+            while True:
+                response = requests.put(url, json=reqBody, timeout=timeout)
 
-                    if response.status_code == 200 or response.status_code == 201:
-                        # Process the response as needed
-                        print(f"Replica {address} successfully updated.")
-                        vectorClock[address] += 1
-                        break  # Exit the loop when a successful response is received
-                    # elif response.status_code == 204:
-                    #     # No updates, continue long-polling
-                    #     print(f"No updates from Replica {address}. Continuing long-polling.")
-                    #     time.sleep(1)
-                    else:
-                        # Handle other status codes if necessary
-                        print(
-                            f"Error updating Replica {address}. Status code: {response.status_code}")
-                        # break # getting rid of this break makes code run forever, but keeping it here I don't think
-                        continue
-                        # adds to the
+                if response.status_code == 200 or response.status_code == 201:
+                    # Process the response as needed
+                    print(f"Replica {address} successfully updated.")
+                    vectorClock[address] += 1
+                    break  # Exit the loop when a successful response is received
+                # elif response.status_code == 204:
+                #     # No updates, continue long-polling
+                #     print(f"No updates from Replica {address}. Continuing long-polling.")
+                #     time.sleep(1)
+                else:
+                    # Handle other status codes if necessary
+                    print(
+                        f"Error updating Replica {address}. Status code: {response.status_code}")
+                    # break # getting rid of this break makes code run forever, but keeping it here I don't think
+                    continue
+                    # adds to the
 
-            except requests.Timeout:
-                # Handle timeout and continue long-polling
-                print(
-                    f"Timeout waiting for updates from Replica {address}. Continuing long-polling.")
-            except Exception as e:
-                # Handle other exceptions if needed
-                print(f"Error: {e}")
+        except requests.Timeout:
+            # Handle timeout and continue long-polling
+            print(
+                f"Timeout waiting for updates from Replica {address}. Continuing long-polling.")
+        except Exception as e:
+            # Handle other exceptions if needed
+            print(f"Error: {e}")
 
 
 # DEUBG Routes
@@ -128,8 +140,8 @@ def deleteFromReplicaView():
     if deletedAddress in view:
         view.remove(deletedAddress)
         return {"result": "deleted"}, 200
-    else:
-        return {"error": "View has no such replica"}, 404
+
+    return {"error": "View has no such replica"}, 404
 
 
 @app.route('/addToReplicaView', methods=['DELETE'])
@@ -139,9 +151,9 @@ def addToReplicaView():
 
     if newAddress in view:
         return {"result": "already present"}, 200
-    else:
-        view.append(newAddress)
-        return {'result': 'added'}
+
+    view.append(newAddress)
+    return {'result': 'added'}
 
 
 # View Operations
@@ -153,12 +165,12 @@ def addReplica():
 
     if newAddress in view:
         return {"result": "already present"}, 200
-    else:
-        view.append(newAddress)
 
-        broadcastAddReplica(newAddress=newAddress)
+    view.append(newAddress)
 
-        return {"result": "added"}, 201
+    broadcastAddReplica(newAddress=newAddress)
+
+    return {"result": "added"}, 201
 
 
 @app.route('/view', methods=['GET'])
@@ -177,8 +189,8 @@ def deleteReplica():
         view.remove(deletedAddress)
         broadCastDeleteReplica(deletedAddress=deletedAddress)
         return {"result": "deleted"}, 200
-    else:
-        return {"error": "View has no such replica"}, 404
+
+    return {"error": "View has no such replica"}, 404
 
 # Key-Value Operations
 # @app.route('/updateVectorClock', methods=['PUT'])
@@ -207,14 +219,13 @@ def addKeyToReplica():
             vectorClock[currentAddress] += 1
 
             return {'result': "replaced", "causal-metadata": vectorClock}, 200
-        else:
-            kvStore[key] = value
-            vectorClock[currentAddress] += 1
 
-            return {'result': 'created', 'causal-metadata': vectorClock}, 201
+        kvStore[key] = value
+        vectorClock[currentAddress] += 1
 
-    else:
-        return {"error": "invalid metadata"}, 503
+        return {'result': 'created', 'causal-metadata': vectorClock}, 201
+
+    return {"error": "invalid metadata"}, 503
 
     #     # implement http long-polling here
 
@@ -236,16 +247,15 @@ def addKey(key):
             broadCastPutKeyReplica(key, value, causalMetadata)
 
             return {'result': "replaced", "causal-metadata": vectorClock}, 200
-        else:
-            kvStore[key] = value
-            vectorClock[currentAddress] += 1
 
-            # Broadcast put to other replicas here
-            broadCastPutKeyReplica(key, value, causalMetadata)
+        kvStore[key] = value
+        vectorClock[currentAddress] += 1
 
-            return {'result': 'created', 'causal-metadata': vectorClock}, 201
+        # Broadcast put to other replicas here
+        broadCastPutKeyReplica(key, value, causalMetadata)
 
-    else:
+        return {'result': 'created', 'causal-metadata': vectorClock}, 201
+
         # timeout = 30  # timeout value
         # start_time = time.time()
         #
@@ -266,7 +276,7 @@ def addKey(key):
         #             return {'result': 'created', 'causal-metadata': vectorClock}, 201
 
         # If the timeout is reached and vector clocks still don't match, return an error
-        return {"error": "Causal dependencies not satisfied; try again later"}, 503
+    return {"error": "Causal dependencies not satisfied; try again later"}, 503
 
 
 @app.route('/kvs/<key>', methods=['GET'])
@@ -281,8 +291,7 @@ def getKey(key):
     if Counter(vectorClock) == Counter(causalMetadata) or causalMetadata is None:
         return {'result': 'found', 'value': kvStore[key], 'causal-metadata': vectorClock}, 200
 
-    else:
-        return {"error": "Causal dependencies not satisfied; try again later", "vector clock": vectorClock}, 503
+    return {"error": "Causal dependencies not satisfied; try again later", "vector clock": vectorClock}, 503
 
 
 @app.route('/kvs/<key>', methods=['DELETE'])
