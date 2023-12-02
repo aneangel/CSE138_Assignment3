@@ -71,17 +71,36 @@ def broadCastDeleteReplica(deletedAddress):
 
 
 def validate_key_length(key):
-    """Validates the length of the key"""
+    """
+    Validates the length of the key.
+
+    Keyword arguments:
+    key -- the key to be validated
+    """
     if len(key) > 50:
         abort(400, "Key is too long")
 
 
 def validate_key_exists(key):
+    """
+    Validates that the key exists in the KV Store.
+
+    Keyword arguments:
+    key -- the key to be validated
+    """
     if key not in kvStore:
         abort(404, "Key does not exist")
 
 
 def broadCastPutKeyReplica(key, value, causalMetadata):
+    """
+    Broadcast the PUT request to all the other replicas in the view.
+
+    Keyword arguments:
+    key -- the key to be added
+    value -- the value to be added
+    causalMetadata -- the causal metadata to be broadcasted
+    """
     for address in view:
         if address == currentAddress:
             return
@@ -156,6 +175,33 @@ def addToReplicaView():
     return {'result': 'added'}
 
 
+# Helper route
+@app.route('/kvs/updateVectorClock', methods=['PUT'])
+def addKeyToReplica():
+    global currentAddress, kvStore, vectorClock
+
+    data = request.get_json()
+    key = data['key']
+    value = data['value']
+    causalMetadata = data['causalMetadata']
+
+    if Counter(vectorClock) == Counter(causalMetadata):
+        if key in kvStore:
+            kvStore[key] = value
+            vectorClock[currentAddress] += 1
+
+            return {'result': "replaced", "causal-metadata": vectorClock}, 200
+
+        kvStore[key] = value
+        vectorClock[currentAddress] += 1
+
+        return {'result': 'created', 'causal-metadata': vectorClock}, 201
+
+    return {"error": "invalid metadata"}, 503
+
+    #     # implement http long-polling here
+
+
 # View Operations
 @app.route('/view', methods=['PUT'])
 def addReplica():
@@ -191,43 +237,6 @@ def deleteReplica():
         return {"result": "deleted"}, 200
 
     return {"error": "View has no such replica"}, 404
-
-# Key-Value Operations
-# @app.route('/updateVectorClock', methods=['PUT'])
-# def updateVectorClock():
-#     data = request.get_json()
-#     updatedVectorClock = data['vector-clock']
-#
-#     # Update the local vector clock with the received vector clock
-#     vectorClock.update(updatedVectorClock)
-#
-#     return {"result": "updated"}, 200
-
-
-@app.route('/kvs/updateVectorClock', methods=['PUT'])
-def addKeyToReplica():
-    global currentAddress, kvStore, vectorClock
-
-    data = request.get_json()
-    key = data['key']
-    value = data['value']
-    causalMetadata = data['causalMetadata']
-
-    if Counter(vectorClock) == Counter(causalMetadata):
-        if key in kvStore:
-            kvStore[key] = value
-            vectorClock[currentAddress] += 1
-
-            return {'result': "replaced", "causal-metadata": vectorClock}, 200
-
-        kvStore[key] = value
-        vectorClock[currentAddress] += 1
-
-        return {'result': 'created', 'causal-metadata': vectorClock}, 201
-
-    return {"error": "invalid metadata"}, 503
-
-    #     # implement http long-polling here
 
 
 @app.route('/kvs/<key>', methods=['PUT'])
