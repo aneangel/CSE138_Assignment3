@@ -68,10 +68,13 @@ def broadcastReplicaOperation(address: str,
             f"Invalid replica brodcast operation: {operation} not in {REPLICA_OPERATION}")
 
     # Construct request parameters
+    request = ""
     url = ""
     if operation == REPLICA_OPERATION.ADD:
+        request = "PUT"
         url = f"http://{address}/addToReplicaView",
     elif operation == REPLICA_OPERATION.DELETE:
+        request = "DELETE"
         url = f"http://{address}/deleteFromReplicaView"
 
     json = {"socket-address": address},
@@ -84,7 +87,7 @@ def broadcastReplicaOperation(address: str,
             continue
 
         try:
-            response = requests.put(url, json, timeout)
+            response = requests.request(request, url, json, timeout)
             response.raise_for_status()
 
         except requests.exceptions.Timeout as e:
