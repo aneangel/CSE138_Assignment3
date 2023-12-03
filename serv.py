@@ -52,8 +52,8 @@ def validate_key_exists(key: str) -> None:
 
 
 # Helper Functions
-def broadcastReplicaOperation(address: str,
-                              operation: REPLICA_OPERATION) -> None:
+def broadcastReplicaState(broadcastAddress: str,
+                          operation: REPLICA_OPERATION) -> None:
     """
     Brodcast the request to add/delete the new replica IP:PORT to all the other
     replicas.
@@ -69,32 +69,33 @@ def broadcastReplicaOperation(address: str,
 
     # Construct request parameters
     request = ""
-    url = ""
+    endpoint = ""
     if operation == REPLICA_OPERATION.ADD:
         request = "PUT"
-        url = f"http://{address}/addToReplicaView",
+        endpoint = "addToReplicaView"
     elif operation == REPLICA_OPERATION.DELETE:
         request = "DELETE"
-        url = f"http://{address}/deleteFromReplicaView"
+        endpoint = "deleteFromReplicaView"
 
-    json = {"socket-address": address},
+    json = {"socket-address": broadcastAddress},
 
     timeout = (CONNECTION_TIMEOUT, None)
 
     # Broadcast request to all other replicas
-    for viewAddress in VIEW:
-        if viewAddress == CURRENT_ADDRESS:
+    for address in VIEW:
+        if address == CURRENT_ADDRESS:
             continue
 
         try:
-            response = requests.request(request, url, json, timeout)
+            response = requests.request(
+                request, f"http://{address}/{endpoint}", json, timeout)
             response.raise_for_status()
 
         except requests.exceptions.Timeout as e:
             # Replica is down; remove from view
             # TODO: more robust detection mechanism
-            VIEW.remove(viewAddress)
-            broadcastReplicaOperation(viewAddress, REPLICA_OPERATION.DELETE)
+            VIEW.remove(address)
+            broadcastReplicaState(address, REPLICA_OPERATION.DELETE)
             continue
 
         except requests.exceptions.ConnectionError as e:
@@ -102,7 +103,9 @@ def broadcastReplicaOperation(address: str,
             # replica?
             abort(500, f"Current replica {CURRENT_ADDRESS} is down.")
 
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
+            print(
+                f"Unexpected error will long-polling Replica {address}: {e}")
             abort(500, e)
 
 
@@ -145,9 +148,15 @@ def broadCastPutKeyReplica(key, value, causalMetadata):
                     f"Request timeout; waiting for updates from Replica {address}. Continuing long-polling...")
 
                 time.sleep(LONG_POLLING_WAIT)
+
+            except requests.exceptions.ConnectionError as e:
+                # TODO: Handle this case; wait for it to come back up? Shutdown
+                # replica?
+                abort(500, f"Current replica {CURRENT_ADDRESS} is down.")
+
             except Exception as e:
                 print(
-                    f"Unexpected error will long-polling Replica {address}: {e}")
+                    f"Unexpected error whill long-polling Replica {address}: {e}")
                 abort(500, e)
 
 
@@ -207,7 +216,7 @@ def addReplica():
     if newAddress in VIEW:
         return {"result": "already present"}, 200
 
-    broadcastReplicaOperation(newAddress, REPLICA_OPERATION.ADD)
+    broadcastReplicaState(newAddress, REPLICA_OPERATION.ADD)
 
     VIEW.append(newAddress)
 
@@ -230,7 +239,7 @@ def deleteReplica():
         return {"error": "View has no such replica"}, 404
 
     VIEW.remove(deletedAddress)
-    broadcastReplicaOperation(deletedAddress, REPLICA_OPERATION.DELETE)
+    broadcastReplicaState(deletedAddress, REPLICA_OPERATION.DELETE)
     return {"result": "deleted"}, 200
 
 
