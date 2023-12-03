@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, abort
+from enum import Enum
 import requests
 import time
 import os
@@ -12,21 +13,23 @@ VIEW_ENV = os.environ.get('VIEW', '')
 VIEW = VIEW_ENV.split(',')
 CURRENT_ADDRESS = os.environ.get('SOCKET_ADDRESS', '')
 
+# Constants
+REPLICA_OPERATION = Enum('REPLICA_OPERATION', ['ADD', 'DELETE'])
+CONNECTION_TIMEOUT = 5
+LONG_POLLING_WAIT = 3
+
 # Initialize global state
 KV_STORE = {}
 VECTOR_CLOCK = defaultdict(int)
 
 
-# VECTOR_CLOCKMatch = asyncio.Event()
-
-
 # Error Handling
 @app.errorhandler(Exception)
-def handle_exception(error):
+def handle_exception(error: Exception) -> [{'error': str}, int]:
     return {'error': error.description}, error.code
 
 
-def validate_key_length(key):
+def validate_key_length(key: str) -> None:
     """
     Validates the length of the key.
 
@@ -37,7 +40,7 @@ def validate_key_length(key):
         abort(400, "Key is too long")
 
 
-def validate_key_exists(key):
+def validate_key_exists(key: str) -> None:
     """
     Validates that the key exists in the KV Store.
 
@@ -49,51 +52,55 @@ def validate_key_exists(key):
 
 
 # Helper Functions
-def broadcastAddReplica(newAddress):
+def broadcastReplicaOperation(address: str,
+                              operation: REPLICA_OPERATION) -> None:
     """
-    Broadcast the request to add the new replica IP:PORT to all the other
-    existing replicas' view.
+    Brodcast the request to add/delete the new replica IP:PORT to all the other
+    replicas.
 
     Keyword arguments:
-    newAddress -- the IP:PORT of the new replica to be added
+    address -- the IP:PORT of the replica to be added/deleted
+    operation -- the operation to be performed on the replica ("ADD" OR "DELETE")
     """
-    for address in VIEW:
-        if address == newAddress or address == CURRENT_ADDRESS:
-            return
+    if operation not in REPLICA_OPERATION:
+        abort(
+            500,
+            f"Invalid replica brodcast operation: {operation} not in {REPLICA_OPERATION}")
 
-        urlExisting = f"http://{address}/addToReplicaView"
-        reqBodyExisting = {"socket-address": newAddress}
-
-        try:
-            responseExisting = requests.put(
-                urlExisting, json=reqBodyExisting)
-            responseExisting.raise_for_status()
-
-        except requests.exceptions.RequestException as e:
-            return e
-
-
-def broadCastDeleteReplica(deletedAddress):
-    """
-    Broadcast the request for deleting an IP:PORT from all the replicas'
-    view storage.
-
-    Keyword arguments:
-    deletedAddress -- the IP:PORT of the replica to be deleted
-    """
-    for address in VIEW:
-        if address == CURRENT_ADDRESS:
-            return
-
+    # Construct request parameters
+    url = ""
+    if operation == REPLICA_OPERATION.ADD:
+        url = f"http://{address}/addToReplicaView",
+    elif operation == REPLICA_OPERATION.DELETE:
         url = f"http://{address}/deleteFromReplicaView"
-        reqBody = {"socket-address": deletedAddress}
+
+    json = {"socket-address": address},
+
+    timeout = (CONNECTION_TIMEOUT, None)
+
+    # Broadcast request to all other replicas
+    for viewAddress in VIEW:
+        if viewAddress == CURRENT_ADDRESS:
+            continue
 
         try:
-            response = requests.delete(url, json=reqBody)
+            response = requests.put(url, json, timeout)
             response.raise_for_status()
 
+        except requests.exceptions.Timeout as e:
+            # Replica is down; remove from view
+            # TODO: more robust detection mechanism
+            VIEW.remove(viewAddress)
+            broadcastReplicaOperation(viewAddress, REPLICA_OPERATION.DELETE)
+            continue
+
+        except requests.exceptions.ConnectionError as e:
+            # TODO: Handle this case; wait for it to come back up? Shutdown
+            # replica?
+            abort(500, f"Current replica {CURRENT_ADDRESS} is down.")
+
         except requests.exceptions.RequestException as e:
-            return e
+            abort(500, e)
 
 
 def broadCastPutKeyReplica(key, value, causalMetadata):
@@ -105,53 +112,40 @@ def broadCastPutKeyReplica(key, value, causalMetadata):
     value -- the value to be added
     causalMetadata -- the causal metadata to be broadcasted
     """
+    # TODO: detection mechanism for when a replica is down
     for address in VIEW:
         if address == CURRENT_ADDRESS:
-            return
+            continue
 
-        url = f"http://{address}/kvs/updateVectorClock"
-        reqBody = {"key": key, "value": value,
-                   "causalMetadata": causalMetadata}
+        while True:
+            try:
+                response = requests.put(
+                    f"http://{address}/kvs/updateVectorClock",
+                    json={
+                        "key": key,
+                        "value": value,
+                        "causalMetadata": causalMetadata},
+                    timeout=(CONNECTION_TIMEOUT, None))
 
-        # try:
-        #     response = requests.put(url, json=reqBody)
-        #     response.raise_for_status()
-        #
-        # except requests.exceptions.RequestException as e:
-        #     print(f"Error updating vector clock at Replica {address}: {e}")
-
-        # Set a timeout value for the long-polling rquest
-        timeout = 30  # We can adjust later
-
-        try:
-            # Using a while loop to repeatedly make long-polling requests until a response is received
-            while True:
-                response = requests.put(url, json=reqBody, timeout=timeout)
+                response.raise_for_status()
 
                 if response.status_code == 200 or response.status_code == 201:
-                    # Process the response as needed
                     print(f"Replica {address} successfully updated.")
                     VECTOR_CLOCK[address] += 1
-                    break  # Exit the loop when a successful response is received
-                # elif response.status_code == 204:
-                #     # No updates, continue long-polling
-                #     print(f"No updates from Replica {address}. Continuing long-polling.")
-                #     time.sleep(1)
-                else:
-                    # Handle other status codes if necessary
-                    print(
-                        f"Error updating Replica {address}. Status code: {response.status_code}")
-                    # break # getting rid of this break makes code run forever, but keeping it here I don't think
-                    continue
-                    # adds to the
+                    return
 
-        except requests.Timeout:
-            # Handle timeout and continue long-polling
-            print(
-                f"Timeout waiting for updates from Replica {address}. Continuing long-polling.")
-        except Exception as e:
-            # Handle other exceptions if needed
-            print(f"Error: {e}")
+                print(
+                    f"Recieved status code '{response.status_code}' from Replica {address}.  Continuing long-polling...")
+
+            except requests.Timeout:
+                print(
+                    f"Request timeout; waiting for updates from Replica {address}. Continuing long-polling...")
+
+                time.sleep(LONG_POLLING_WAIT)
+            except Exception as e:
+                print(
+                    f"Unexpected error will long-polling Replica {address}: {e}")
+                abort(500, e)
 
 
 # Helper routes
@@ -160,11 +154,11 @@ def deleteFromReplicaView():
     data = request.get_json()
     deletedAddress = data['socket-address']
 
-    if deletedAddress in VIEW:
-        VIEW.remove(deletedAddress)
-        return {"result": "deleted"}, 200
+    if deletedAddress not in VIEW:
+        return {"error": "View has no such replica"}, 404
 
-    return {"error": "View has no such replica"}, 404
+    VIEW.remove(deletedAddress)
+    return {"result": "deleted"}, 200
 
 
 @app.route('/addToReplicaView', methods=['DELETE'])
@@ -176,7 +170,7 @@ def addToReplicaView():
         return {"result": "already present"}, 200
 
     VIEW.append(newAddress)
-    return {'result': 'added'}
+    return {'result': 'added'}, 201
 
 
 @app.route('/kvs/updateVectorClock', methods=['PUT'])
@@ -186,58 +180,55 @@ def addKeyToReplica():
     value = data['value']
     causalMetadata = data['causalMetadata']
 
-    if Counter(VECTOR_CLOCK) == Counter(causalMetadata):
-        if key in KV_STORE:
-            KV_STORE[key] = value
-            VECTOR_CLOCK[CURRENT_ADDRESS] += 1
+    if Counter(VECTOR_CLOCK) != Counter(causalMetadata):
+        return {"error": "invalid metadata"}, 503
 
-            return {'result': "replaced", "causal-metadata": VECTOR_CLOCK}, 200
+    isNewKey = key not in KV_STORE
 
-        KV_STORE[key] = value
-        VECTOR_CLOCK[CURRENT_ADDRESS] += 1
+    KV_STORE[key] = value
+    VECTOR_CLOCK[CURRENT_ADDRESS] += 1
 
+    if isNewKey:
         return {'result': 'created', 'causal-metadata': VECTOR_CLOCK}, 201
 
-    return {"error": "invalid metadata"}, 503
-
-    # implement http long-polling here
+    return {'result': "replaced", "causal-metadata": VECTOR_CLOCK}, 200
 
 
 # View Operations
 @app.route('/view', methods=['PUT'])
 def addReplica():
-    """"Adds a new replica to the view"""
+    """"Adds a new replica to the view."""
     data = request.get_json()
     newAddress = data['socket-address']
 
     if newAddress in VIEW:
         return {"result": "already present"}, 200
 
-    VIEW.append(newAddress)
+    broadcastReplicaOperation(newAddress, REPLICA_OPERATION.ADD)
 
-    broadcastAddReplica(newAddress=newAddress)
+    VIEW.append(newAddress)
 
     return {"result": "added"}, 201
 
 
 @app.route('/view', methods=['GET'])
 def getReplica():
-    """Retrieve the view from a replica"""
+    """Retrieve the view from a replica."""
     return {"view": VIEW}, 200
 
 
 @app.route("/view", methods=['DELETE'])
 def deleteReplica():
-    """Removes an existing replica from the view"""
+    """Removes an existing replica from the view."""
     data = request.get_json()
     deletedAddress = data['socket-address']
 
-    if deletedAddress in VIEW:
-        VIEW.remove(deletedAddress)
-        broadCastDeleteReplica(deletedAddress=deletedAddress)
-        return {"result": "deleted"}, 200
+    if deletedAddress not in VIEW:
+        return {"error": "View has no such replica"}, 404
 
-    return {"error": "View has no such replica"}, 404
+    VIEW.remove(deletedAddress)
+    broadcastReplicaOperation(deletedAddress, REPLICA_OPERATION.DELETE)
+    return {"result": "deleted"}, 200
 
 
 # Key-Value Store Operations
@@ -249,43 +240,20 @@ def addKey(key):
     value = data['value']
     causalMetadata = data['causal-metadata']
 
-    if Counter(VECTOR_CLOCK) == Counter(causalMetadata):
-        if key in KV_STORE:
-            KV_STORE[key] = value
-            VECTOR_CLOCK[CURRENT_ADDRESS] += 1
+    if Counter(VECTOR_CLOCK) != Counter(causalMetadata):
+        return {"error": "Causal dependencies not satisfied; try again later"}, 503
 
-            broadCastPutKeyReplica(key, value, causalMetadata)
+    isNewKey = key not in KV_STORE
 
-            return {'result': "replaced", "causal-metadata": VECTOR_CLOCK}, 200
+    KV_STORE[key] = value
+    VECTOR_CLOCK[CURRENT_ADDRESS] += 1
 
-        KV_STORE[key] = value
-        VECTOR_CLOCK[CURRENT_ADDRESS] += 1
+    broadCastPutKeyReplica(key, value, causalMetadata)
 
-        broadCastPutKeyReplica(key, value, causalMetadata)
-
+    if isNewKey:
         return {'result': 'created', 'causal-metadata': VECTOR_CLOCK}, 201
 
-        # timeout = 30  # timeout value
-        # start_time = time.time()
-        #
-        # while time.time() - start_time < timeout:
-        #     time.sleep(1)  # delay before the next long-polling attempt
-        #
-        #     if Counter(VECTOR_CLOCK) == Counter(causalMetadata):
-        #         # If vector clocks match, then proceed with the update
-        #         if key in KV_STORE:
-        #             KV_STORE[key] = value
-        #             VECTOR_CLOCK[CURRENT_ADDRESS] += 1
-        #
-        #             return {'result': "replaced", "causal-metadata": VECTOR_CLOCK}, 200
-        #         else:
-        #             KV_STORE[key] = value
-        #             VECTOR_CLOCK[CURRENT_ADDRESS] += 1
-        #
-        #             return {'result': 'created', 'causal-metadata': VECTOR_CLOCK}, 201
-
-        # If the timeout is reached and vector clocks still don't match, return an error
-    return {"error": "Causal dependencies not satisfied; try again later"}, 503
+    return {'result': "replaced", "causal-metadata": VECTOR_CLOCK}, 200
 
 
 @app.route('/kvs/<key>', methods=['GET'])
@@ -295,10 +263,13 @@ def getKey(key):
     data = request.get_json()
     causalMetadata = data['causal-metadata']
 
-    if Counter(VECTOR_CLOCK) == Counter(causalMetadata) or causalMetadata is None:
-        return {'result': 'found', 'value': KV_STORE[key], 'causal-metadata': VECTOR_CLOCK}, 200
+    if Counter(VECTOR_CLOCK) != Counter(
+            causalMetadata) and causalMetadata is not None:
+        return {"error": "Causal dependencies not satisfied; try again later",
+                "vector clock": VECTOR_CLOCK}, 503
 
-    return {"error": "Causal dependencies not satisfied; try again later", "vector clock": VECTOR_CLOCK}, 503
+    return {'result': 'found',
+            'value': KV_STORE[key], 'causal-metadata': VECTOR_CLOCK}, 200
 
 
 @app.route('/kvs/<key>', methods=['DELETE'])
