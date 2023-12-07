@@ -10,4 +10,4 @@ RUN pip install requests
 
 ADD serv.py /
 
-CMD [ "python3", "./serv.py" ]
+CMD [ "python3", "./server.py" ]
