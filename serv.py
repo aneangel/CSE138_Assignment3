@@ -146,8 +146,13 @@ def broadCastPutKeyReplica(key, causalMetadata, value):
             requests.put(url, json=reqBody)
 
 
-def vectorsMatch(vectorClock1, vectorClock2):
-    return vectorClock1.items() == vectorClock2.items()
+def vectorsMatch(vectorClock1, vectorClock2, address):
+    if address not in vectorClock1 and address not in vectorClock2:
+        return True
+    elif (address not in vectorClock1 and address in vectorClock2) or (address in vectorClock1 and address not in vectorClock2):
+        return False
+    else:
+        return vectorClock1[address] == vectorClock2[address]
 
 
 @app.route('/kvs/addKeyToReplica/<key>')
@@ -159,7 +164,7 @@ def addKeyToReplica(key):
     causalMetadata = data['causal-metadata']
 
     while True:
-        if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata) or causalMetadata is None:
+        if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata, address=currentAddress) or causalMetadata is None:
             if key in kvStore:
                 kvStore[key] = value
                 vectorClock[currentAddress] += 1
@@ -184,7 +189,7 @@ def addKey(key):
     value = data['value']
     causalMetadata = data['causal-metadata']
 
-    if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata) or causalMetadata is None:
+    if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata, address=currentAddress) or causalMetadata is None:
         if key in kvStore:
             kvStore[key] = value
             vectorClock[currentAddress] += 1
@@ -215,7 +220,7 @@ def getKey(key):
     data = request.get_json()
     causalMetadata = data['causal-metadata']
 
-    if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata) or causalMetadata is None:
+    if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata, address=currentAddress) or causalMetadata is None:
         return {'result': 'found', 'value': kvStore[key], 'causal-metadata': vectorClock}, 200
 
     else:
@@ -244,7 +249,7 @@ def delKeyFromReplica(key):
 
     # responsible for the HTTP long-polling
     while True:
-        if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata) or causalMetadata is None:
+        if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata, address=currentAddress) or causalMetadata is None:
             validate_key_exists(key=key)
 
             del kvStore[key]
@@ -264,7 +269,7 @@ def deleteKey(key):
     data = request.get_json()
     causalMetadata = data['causal-metadata']
 
-    if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata) or causalMetadata is None:
+    if vectorsMatch(vectorClock1=vectorClock, vectorClock2=causalMetadata, address=currentAddress) or causalMetadata is None:
 
         del kvStore[key]
         vectorClock[currentAddress] += 1
