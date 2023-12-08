@@ -210,14 +210,14 @@ def deleteReplica():
 def addKey(key):
     global global_kv_store
 
-    replica.logger.debug("PUT request received")
-
     # Parse request
     nobroadcast = request.args.get('nobroadcast', False)
     data = request.get_json()
     value = data.get('value')
     dict_incomingVectorClock = data.get('causal-metadata', {})
-    incomingVectorClock = VectorClock(*(dict_incomingVectorClock or {}))
+    incomingVectorClock = VectorClock(dict_incomingVectorClock or {})
+
+    replica.logger.debug("Parsing request")
 
     validate_key_length(key)
     validate_value(value)
@@ -225,6 +225,8 @@ def addKey(key):
     isNewKey = key not in global_kv_store
 
     # Update KV Store
+    replica.logger.debug("Updating KV Store")
+
     updateSuccessfull = global_kv_store.update(key, value, incomingVectorClock)
     if not updateSuccessfull:
         abort(503, "Causal dependencies not satisfied; try again later")
@@ -232,6 +234,9 @@ def addKey(key):
     if not nobroadcast:
         addresses = VIEW.copy()
         addresses.remove(CURRENT_ADDRESS)
+
+        replica.logger.debug(
+            f"Broadcasting update with causal metadata {global_kv_store.vectorClock}")
 
         def putRequest(address): return requests.put(
             f"http://{address}/kvs/{key}",
@@ -257,7 +262,7 @@ def getKey(key):
 
     data = request.get_json()
     causalMetadata = data.get('causal-metadata', {})
-    incomingVectorClock = VectorClock(causalMetadata)
+    incomingVectorClock = VectorClock(causalMetadata or {})
 
     validate_key_exists(key)
 

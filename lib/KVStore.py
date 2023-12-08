@@ -17,13 +17,10 @@ class VectorClock(defaultdict):
         """
         Combine two vector clocks by taking the maximum value for each node's entry.
 
-        Args:
-            clock1 (defaultdict): First vector clock.
-            clock2 (defaultdict): Second vector clock.
-
-        Returns:
-            defaultdict: Combined vector clock.
+        Keyword arguments:
+        secondClock -- Second vector clock to combine.
         """
+        # TODO: Logic is not quite right
 
         if secondClock is None:
             return
@@ -42,6 +39,8 @@ class VectorClock(defaultdict):
         self = _vector_clock
 
     def is_casually_after(self, other):
+        # TODO: Logic is not quite right
+
         for address in self:
             if self[address] < other[address]:
                 return False
@@ -74,8 +73,14 @@ class KVStore():
         if incomingVectorClock is not None and not incomingVectorClock.is_casually_after(self.vectorClock):
             return False
 
-        self.__dict[key] = value
         self.vectorClock.update(incomingVectorClock)
+
+        if value is None:
+            del self.__dict[key]
+        else:
+            self.__dict[key] = value
+
+        self.vectorClock[self.currentAddress] += 1
 
         return True
 
