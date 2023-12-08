@@ -284,4 +284,6 @@ def deleteKey(key):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    print(int(currentAddress.split(':')[1]))
+    print(currentAddress.split(':')[0])
+    app.run(debug=True, port=int(currentAddress.split(':')[1]), host=currentAddress.split(':')[0])
