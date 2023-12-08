@@ -1,44 +1,63 @@
 from collections import defaultdict
 
 
-class VectorClock():
+class VectorClock(defaultdict):
     """
     A vector clock implementation.
 
-    The vector clock is a dictionary of replica names to integers. Each integer
-    is the number of times that replica has performed an operation on the key
+    The vector clock is a dictionary of address names to integers. Each integer
+    is the number of times that address has performed an operation on the key
     associated with the vector clock.
     """
 
-    def __init__(self, d=None):
-        self.__vector_clock = defaultdict(int, d)
+    def __init__(self, d={}):
+        super(VectorClock, self).__init__(int, d)
 
-    def __getitem__(self, replica):
-        return self.__vector_clock[replica]
+    def update(self, secondClock=None):
+        """
+        Combine two vector clocks by taking the maximum value for each node's entry.
 
-    def increment(self, replica):
-        self.__vector_clock[replica] += 1
+        Args:
+            clock1 (defaultdict): First vector clock.
+            clock2 (defaultdict): Second vector clock.
+
+        Returns:
+            defaultdict: Combined vector clock.
+        """
+
+        if secondClock is None:
+            return
+
+        # TODO: should throw error if not causally after ?
+
+        # Take the maximum value for each node's entry
+        _vector_clock = defaultdict(int)
+        for node in set(self.keys()) | set(secondClock.keys()):
+            maxClock = max(
+                self[node], secondClock[node])
+
+            # TODO: maybe there isn't a problem with mutating in place?
+            _vector_clock[node] = maxClock
+
+        self = _vector_clock
 
     def is_casually_after(self, other):
-        for replica in self.__vector_clock:
-            if self.__vector_clock[replica] < other.__vector_clock[replica]:
+        for address in self:
+            if self[address] < other[address]:
                 return False
 
         return True
 
     def __repr__(self):
-        return dict.__repr__(self.__vector_clock)
+        return dict.__repr__(self)
 
-# class Entry():
-
-#     def __init__(self, value=None, vector_clock=None):
-#         self.value = value
-#         self.vector_clock = VectorClock(vector_clock)
+    def __str__(self):
+        return dict.__str__(self)
 
 
 class KVStore():
     """
-    A replicated key-value store instance. 
+    A addressted key-value store instance. 
 
     The store is a dictionary of key-value pairs, where each key is a string and
     each value is an object storing the value and the vector clock for that key.
@@ -46,32 +65,30 @@ class KVStore():
     Operations may fail if casual consistency is violated.
     """
 
-    def __init__(self, replica, kv_store_dict=None):
-        self.__store = defaultdict(
-            lambda: {
-                'value': None,
-                'vectorClock': VectorClock
-            }, kv_store_dict
-        )
+    def __init__(self, address, kv_store_dict={}):
+        self.__dict = defaultdict(int, kv_store_dict)
+        self.currentAddress = address
+        self.vectorClock = VectorClock()
 
-        self.__replica = replica
+    def update(self, key, value, incomingVectorClock=None):
+        if incomingVectorClock is not None and not incomingVectorClock.is_casually_after(self.vectorClock):
+            return False
 
-    def update(self, key, value):
-        self.__store[key]['value'] = value
-        self.__store[key]['vectorClock'][key][self.__replica].increment()
+        self.__dict[key] = value
+        self.vectorClock.update(incomingVectorClock)
 
-    def reflectSend(self, key, replica):
-        self.__store[key]['vectorClock'][replica][self.__replica].increment()
+        return True
 
-    def getValue(self, key):
-        return self.__store[key]['value']
-
-    def getVectorClock(self, key):
-        return self.__store[key]['vectorClock']
+    def get(self, key):
+        return self.__dict[key]
 
     @property
-    def causalMetadata(self):
-        return {key: self.__store[key]['vectorClock'] for key in self.__store}
+    def dict(self):
+        return self.__dict
 
-    def __repr__(self):
-        return dict.__repr__(self.__store)
+    def __contains__(self, key):
+        return key in self.__dict
+
+    def __str__(self):
+        str_dict = dict.__repr__(self.__dict)
+        return f"dict: {str_dict}\ncasual metdata: {self.vectorClock}"
