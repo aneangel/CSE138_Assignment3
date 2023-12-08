@@ -267,7 +267,8 @@ def getKey(key):
     validate_key_exists(key)
 
     # Check if causal dependencies are satisfied
-    if not incomingVectorClock.is_casually_after(global_kv_store.vectorClock):
+    updateSuccessfull = global_kv_store.get(key, incomingVectorClock)
+    if not updateSuccessfull:
         abort(503, "Causal dependencies not satisfied; try again later")
 
     value = global_kv_store.get(key)

@@ -69,7 +69,7 @@ class KVStore():
         self.currentAddress = address
         self.vectorClock = VectorClock()
 
-    def update(self, key, value, incomingVectorClock=None):
+    def update(self, key, value, incomingVectorClock):
         if incomingVectorClock is not None and not incomingVectorClock.is_casually_after(self.vectorClock):
             return False
 
@@ -84,7 +84,10 @@ class KVStore():
 
         return True
 
-    def get(self, key):
+    def get(self, key, incomingVectorClock):
+        if incomingVectorClock is not None and not incomingVectorClock.is_casually_after(self.vectorClock):
+            return False
+
         return self.__dict[key]
 
     @property
