@@ -64,7 +64,7 @@ def validate_key_exists(key: str) -> None:
     """
     global global_kv_store
 
-    if key not in global_kv_store:
+    if key not in global_kv_store or global_kv_store.dict[key] is None:
         abort(404, "Key does not exist")
 
 
@@ -210,19 +210,24 @@ def deleteReplica():
 def addKey(key):
     global global_kv_store
 
+    replica.logger.debug("PUT request received")
+
     # Parse request
     nobroadcast = request.args.get('nobroadcast', False)
     data = request.get_json()
     value = data.get('value')
     dict_incomingVectorClock = data.get('causal-metadata', {})
-    incomingVectorClock = VectorClock(dict_incomingVectorClock)
+    incomingVectorClock = VectorClock(*(dict_incomingVectorClock or {}))
 
     validate_key_length(key)
     validate_value(value)
 
     isNewKey = key not in global_kv_store
 
-    global_kv_store.update(key, value, incomingVectorClock)
+    # Update KV Store
+    updateSuccessfull = global_kv_store.update(key, value, incomingVectorClock)
+    if not updateSuccessfull:
+        abort(503, "Causal dependencies not satisfied; try again later")
 
     if not nobroadcast:
         addresses = VIEW.copy()
@@ -234,47 +239,70 @@ def addKey(key):
             params={"nobroadcast": True},
             json={
                 "value": value,
-                "vectorClock": global_kv_store.vectorClock},
+                "causal-metadata": global_kv_store.vectorClock},
             timeout=(CONNECTION_TIMEOUT, None)
         )
 
         brodcast(addresses, putRequest)
 
     if isNewKey:
-        return {'result': 'created', 'causal-metadata': global_kv_store.causalMetadata}, 201
+        return {'result': 'created', 'causal-metadata': global_kv_store.vectorClock}, 201
 
-    return {'result': "replaced", "causal-metadata": global_kv_store.causalMetadata}, 200
+    return {'result': "replaced", "causal-metadata": global_kv_store.vectorClock}, 200
 
 
 @replica.route('/kvs/<key>', methods=['GET'])
 def getKey(key):
     global global_kv_store, vectorClock
 
+    data = request.get_json()
+    causalMetadata = data.get('causal-metadata', {})
+    incomingVectorClock = VectorClock(causalMetadata)
+
     validate_key_exists(key)
 
-    data = request.get_json()
-    causalMetadata = data.get('causal-metadata')
+    # Check if causal dependencies are satisfied
+    if not incomingVectorClock.is_casually_after(global_kv_store.vectorClock):
+        abort(503, "Causal dependencies not satisfied; try again later")
 
-    # if Counter(vectorClock) != Counter(
-    #         causalMetadata) and causalMetadata is not None:
-    #     abort(503, f"Causal dependencies not satisfied; try again later")
+    value = global_kv_store.get(key)
 
-    # return {'result': 'found',
-    #         'value': global_kv_store[key], 'causal-metadata': vectorClock}, 200
+    return {'result': 'found', "value": value, "causal-metadata": global_kv_store.vectorClock}, 200
 
 
 @replica.route('/kvs/<key>', methods=['DELETE'])
 def deleteKey(key):
     global global_kv_store
 
-    validate_key_exists(key)
-
+    # Parse request
+    nobroadcast = request.args.get('nobroadcast', False)
     data = request.get_json()
-    causalMetadata = data['causal-metadata']
+    dict_incomingVectorClock = data.get('causal-metadata', {})
+    incomingVectorClock = VectorClock(dict_incomingVectorClock)
 
-    # del global_kv_store[key]
+    validate_key_length(key)
 
-    # return {'result': 'deleted', 'causal-metadata': '<V>'}
+    updateSuccessfull = global_kv_store.update(key, None, incomingVectorClock)
+    if not updateSuccessfull:
+        abort(503, "Causal dependencies not satisfied; try again later")
+
+    if not nobroadcast:
+        addresses = VIEW.copy()
+        addresses.remove(CURRENT_ADDRESS)
+
+        def putRequest(address): return requests.put(
+            f"http://{address}/kvs/{key}",
+            headers={"Content-Type": "application/json"},
+            params={"nobroadcast": True},
+            json={
+                "value": None,
+                "causal-metadata": global_kv_store.vectorClock},
+            timeout=(CONNECTION_TIMEOUT, None)
+        )
+
+        brodcast(addresses, putRequest)
+
+    return {'result': "deleted", "causal-metadata": global_kv_store.vectorClock}, 200
 
 
 # DEBUG

@@ -66,7 +66,7 @@ class KVStore():
     """
 
     def __init__(self, address, kv_store_dict={}):
-        self.__dict = defaultdict(int, kv_store_dict)
+        self.__dict = kv_store_dict
         self.currentAddress = address
         self.vectorClock = VectorClock()
 
@@ -90,5 +90,4 @@ class KVStore():
         return key in self.__dict
 
     def __str__(self):
-        str_dict = dict.__repr__(self.__dict)
-        return f"dict: {str_dict}\ncasual metdata: {self.vectorClock}"
+        return f"dict: {self.__dict}\ncasual metdata: {self.vectorClock}"
