@@ -225,7 +225,16 @@ def addKey(key):
     isNewKey = key not in global_kv_store
 
     # Update KV Store
-    updateSuccessfull = global_kv_store.update(key, value, incomingVectorClock)
+
+    # Combine vector clocks only on non broadcast requests in replicas
+    if nobroadcast:
+        updateSuccessfull = global_kv_store.update(key, value, toCombine=True, currentReplica=CURRENT_ADDRESS,
+                                                   incomingVectorClock=incomingVectorClock)
+    # Don't combine vector clocks on broadcast requests in a replica, just increment it's own clock
+    else:
+        updateSuccessfull = global_kv_store.update(key, value, toCombine=False, currentReplica=CURRENT_ADDRESS,
+                                                   incomingVectorClock=incomingVectorClock)
+
     if not updateSuccessfull:
         abort(503, "Causal dependencies not satisfied; try again later")
 

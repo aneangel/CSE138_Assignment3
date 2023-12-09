@@ -13,7 +13,10 @@ class VectorClock(defaultdict):
     def __init__(self, d={}):
         super(VectorClock, self).__init__(int, d)
 
-    def update(self, secondClock=None):
+    def incrementClock(self, currentReplica):
+        self[currentReplica] += 1
+
+    def combineClocks(self, secondClock=None):
         """
         Combine two vector clocks by taking the maximum value for each node's entry.
 
@@ -23,12 +26,15 @@ class VectorClock(defaultdict):
 
         Returns:
             defaultdict: Combined vector clock.
+            :param secondClock:
+            :param currentReplica:
         """
 
         if secondClock is None:
             return
 
         # TODO: should throw error if not causally after ?
+
 
         # Take the maximum value for each node's entry
         _vector_clock = defaultdict(int)
@@ -70,12 +76,18 @@ class KVStore():
         self.currentAddress = address
         self.vectorClock = VectorClock()
 
-    def update(self, key, value, incomingVectorClock=None):
+    def update(self, key, value, toCombine, currentReplica, incomingVectorClock=None):
         if incomingVectorClock is not None and not incomingVectorClock.is_casually_after(self.vectorClock):
             return False
 
         self.__dict[key] = value
-        self.vectorClock.update(incomingVectorClock)
+
+        # checks whether it should only combine
+        if toCombine:
+            self.vectorClock.combineClocks(incomingVectorClock)
+        # checks whether to just increment
+        else:
+            self.vectorClock.incrementClock(currentReplica=currentReplica)
 
         return True
 
