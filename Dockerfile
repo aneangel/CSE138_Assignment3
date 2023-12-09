@@ -8,6 +8,7 @@ FROM python:3
 RUN pip install flask
 RUN pip install requests
 
-ADD serv.py /
+COPY lib ./lib
+COPY server.py ./
 
-CMD [ "python3", "./serv.py" ]
+CMD [ "python3", "./server.py" ]
