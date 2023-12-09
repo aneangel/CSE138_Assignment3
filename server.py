@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, abort
+from threading import Thread
 import logging
 import requests
 import time
@@ -84,6 +85,9 @@ def poll(address) -> None:
     """
     global VIEW
 
+    replica.logger.info(
+        f"Cannot reach {address}, starting polling for replica {address}")
+
     while True:
         try:
             replica.logger.debug(
@@ -95,22 +99,25 @@ def poll(address) -> None:
             response.raise_for_status()
 
             replica.logger.info(
-                f"Successfully reached replica {address} again")
+                f"Successfully reached replica {address} again!")
 
             # Add replica back to view
             VIEW.append(address)
             addresses = VIEW.copy()
-            addresses = address.remove(CURRENT_ADDRESS)
+            addresses.remove(CURRENT_ADDRESS)
             addresses.remove(address)
 
-            def putRequest(address): return requests.put(
-                f"http://{address}/view",
+            replica.logger.debug(f'Broadcasting view {address} to {addresses}')
+
+            def putRequest(add): return requests.put(
+                f"http://{add}/view",
                 params={"nobroadcast": True},
                 headers={"Content-Type": "application/json"},
                 json={"socket-address": address}
             )
 
             brodcast(addresses, putRequest)
+            return
 
         except requests.exceptions.ConnectionError as e:
             replica.logger.debug(
@@ -126,7 +133,7 @@ def poll(address) -> None:
             abort(
                 500, f"Unexpected error will long-polling Replica {address}: {e}")
         finally:
-            time.seep(LONG_POLLING_WAIT)
+            time.sleep(LONG_POLLING_WAIT)
 
 
 # Helper Functions
@@ -157,6 +164,9 @@ def handleUnreachableReplica(deleteAddress: str) -> None:
     brodcast(addresses, delRequest)
 
     # Start polling for replica to come back up
+    t = Thread(target=poll, args=(deleteAddress,))
+    t.daemon = True
+    t.start()
 
 
 def brodcast(addresses, request):
@@ -208,6 +218,9 @@ def addReplica():
     nobroadcast = request.args.get('nobroadcast', False)
     data = request.get_json()
     newAddress = data['socket-address']
+
+    replica.logger.debug(
+        f"PUT request received, view is currently '{VIEW}' adding '{newAddress}'")
 
     if newAddress in VIEW:
         return {"result": "already present"}, 200
@@ -281,12 +294,16 @@ def addKey(key):
     data = request.get_json()
     value = data.get('value')
     dict_incomingVectorClock = data.get('causal-metadata', {})
-    incomingVectorClock = VectorClock(*(dict_incomingVectorClock or {}))
+    incomingVectorClock = VectorClock(dict_incomingVectorClock or {})
+
+    replica.logger.debug("PUT parameters parsed")
 
     validate_key_length(key)
     validate_value(value)
 
     isNewKey = key not in global_kv_store
+
+    replica.logger.debug("PUT about to update kv_store")
 
     # Update KV Store
     updateSuccessfull = global_kv_store.update(key, value, incomingVectorClock)
@@ -321,7 +338,7 @@ def getKey(key):
 
     data = request.get_json()
     causalMetadata = data.get('causal-metadata', {})
-    incomingVectorClock = VectorClock(causalMetadata)
+    incomingVectorClock = VectorClock(causalMetadata or {})
 
     validate_key_exists(key)
 
@@ -330,7 +347,7 @@ def getKey(key):
     if not incomingVectorClock.is_casually_after(global_kv_store.vectorClock):
         abort(503, "Causal dependencies not satisfied; try again later")
 
-    value = global_kv_store.get(key)
+    value = global_kv_store.get(key, incomingVectorClock)
 
     return {'result': 'found', "value": value, "causal-metadata": global_kv_store.vectorClock}, 200
 
