@@ -71,7 +71,7 @@ class KVStore():
     """
 
     def __init__(self, address, kv_store_dict={}):
-        self.__dict = kv_store_dict
+        self.dict = kv_store_dict
         self.currentAddress = address
         self.vectorClock = VectorClock()
 
@@ -84,9 +84,9 @@ class KVStore():
         self.vectorClock.update(incomingVectorClock)
 
         if value is None:
-            del self.__dict[key]
+            del self.dict[key]
         else:
-            self.__dict[key] = value
+            self.dict[key] = value
 
         self.vectorClock[self.currentAddress] += 1
 
@@ -98,14 +98,10 @@ class KVStore():
         if incomingVectorClock is not None and not incomingVectorClock.is_casually_after(self.vectorClock):
             return False
 
-        return self.__dict[key]
-
-    @property
-    def dict(self):
-        return self.__dict
+        return self.dict[key]
 
     def __contains__(self, key):
-        return key in self.__dict
+        return key in self.dict
 
     def __str__(self):
-        return f"dict: {self.__dict}\ncasual metdata: {self.vectorClock}"
+        return f"dict: {self.dict}\ncasual metdata: {self.vectorClock}"

@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, abort
 from threading import Thread
+from collections import defaultdict
 import logging
 import requests
 import time
@@ -94,8 +95,12 @@ def poll(address) -> None:
                 f"Attempting to reach replica {address}")
 
             # Check if replica is back up
-            response = requests.get(
-                f"http://{address}/view", timeout=(CONNECTION_TIMEOUT, None))
+            response = requests.put(
+                f"http://{address}/kvs",
+                headers={"Content-Type": "application/json"},
+                json={"kv-store": global_kv_store.dict,
+                      "causal-metadata": global_kv_store.vectorClock},
+                timeout=(CONNECTION_TIMEOUT, None))
             response.raise_for_status()
 
             replica.logger.info(
@@ -137,7 +142,7 @@ def poll(address) -> None:
 
 
 # Helper Functions
-def handleUnreachableReplica(deleteAddress: str) -> None:
+def handleUnreachableReplica(deleteAddress: str, request) -> None:
     """
     Handles the case when a replica is unreachable.
 
@@ -193,7 +198,7 @@ def brodcast(addresses, request):
 
         except requests.exceptions.ConnectionError as e:
             # TODO: more robust detection mechanism
-            handleUnreachableReplica(address)
+            handleUnreachableReplica(address, request)
             continue
 
         except requests.exceptions.RequestException as e:
@@ -387,12 +392,27 @@ def deleteKey(key):
     return {'result': "deleted", "causal-metadata": global_kv_store.vectorClock}, 200
 
 
-# DEBUG
 @replica.route('/kvs', methods=['GET'])
 def getKVStore():
     global global_kv_store
 
     return str(global_kv_store), 200
+
+
+@replica.route('/kvs', methods=['PUT'])
+def putKVStore():
+    global global_kv_store
+    data = request.get_json()
+    dict_incoming_kv_store = data.get('kv-store', {})
+    dict_incomingVectorClock = data.get('causal-metadata', {})
+    incomingVectorClock = VectorClock(dict_incomingVectorClock)
+
+    global_kv_store.dict = dict_incoming_kv_store
+
+    # TODO: Not correct
+    global_kv_store.vectorClock = incomingVectorClock
+
+    return "Replica up to date", 200
 
 
 # Main
