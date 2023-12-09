@@ -4,6 +4,7 @@ import time
 import os
 import asyncio
 from lib.KVStore import KVStore, VectorClock
+import queue
 
 replica = Flask(__name__)
 
@@ -18,6 +19,9 @@ LONG_POLLING_WAIT = 1
 
 # Initialize KV Store
 global_kv_store = KVStore(CURRENT_ADDRESS)
+
+# Initialize the request queue
+request_queue = queue.Queue()
 
 
 # Error Handling
@@ -94,12 +98,13 @@ async def poll(address) -> None:
             addresses = address.remove(CURRENT_ADDRESS)
             addresses.remove(address)
 
-            def putRequest(address): return requests.put(
-                f"http://{address}/view",
-                params={"nobroadcast": True},
-                headers={"Content-Type": "application/json"},
-                json={"socket-address": address}
-            )
+            def putRequest(address):
+                return requests.put(
+                    f"http://{address}/view",
+                    params={"nobroadcast": True},
+                    headers={"Content-Type": "application/json"},
+                    json={"socket-address": address}
+                )
 
             brodcast(addresses, putRequest)
 
@@ -121,14 +126,30 @@ async def poll(address) -> None:
 
 
 # Helper Functions
-def handleUnreachableReplica(deleteAddress: str) -> None:
+def executeQueue():
+    global request_queue
+
+    while request_queue:
+        r = request_queue.get()
+        if r[1] == 'GET':
+            requests.get(r[0])
+        elif r[1] == 'POST':
+            requests.post(r[0])
+        elif r[1] == 'PUT':
+            requests.put(r[0])
+        elif r[1] == 'DELETE':
+            requests.delete(r[0])
+
+
+
+def handleUnreachableReplica(deleteAddress: str, requestSent) -> None:
     """
     Handles the case when a replica is unreachable.
 
     Keyword arguments:
     address -- the IP:PORT of the unreachable replica
     """
-    global VIEW
+    global VIEW, request_queue
 
     replica.logger.error(
         f"Could not reach replica {deleteAddress}, removing from view")
@@ -145,6 +166,7 @@ def handleUnreachableReplica(deleteAddress: str) -> None:
         json={"socket-address": deleteAddress}
     )
 
+    request_queue.put((requestSent, requestSent.method))
     brodcast(addresses, delRequest)
 
     # Start polling for replica to come back up
@@ -174,7 +196,7 @@ def brodcast(addresses, request):
 
         except requests.exceptions.ConnectionError as e:
             # TODO: more robust detection mechanism
-            handleUnreachableReplica(address)
+            handleUnreachableReplica(address, request)
             continue
 
         except requests.exceptions.RequestException as e:
