@@ -1,4 +1,7 @@
 from collections import defaultdict
+import logging
+
+log = logging.getLogger('server.kv_store')
 
 
 class VectorClock(defaultdict):
@@ -17,13 +20,10 @@ class VectorClock(defaultdict):
         """
         Combine two vector clocks by taking the maximum value for each node's entry.
 
-        Args:
-            clock1 (defaultdict): First vector clock.
-            clock2 (defaultdict): Second vector clock.
-
-        Returns:
-            defaultdict: Combined vector clock.
+        Keyword arguments:
+        secondClock -- Second vector clock to combine.
         """
+        # TODO: Logic is not quite right
 
         if secondClock is None:
             return
@@ -42,8 +42,12 @@ class VectorClock(defaultdict):
         self = _vector_clock
 
     def is_casually_after(self, other):
+        # TODO: Logic is not quite right
+
         for address in self:
             if self[address] < other[address]:
+                log.debug(
+                    f"Address {address} is not causally after {other[address]}")
                 return False
 
         return True
@@ -70,16 +74,29 @@ class KVStore():
         self.currentAddress = address
         self.vectorClock = VectorClock()
 
-    def update(self, key, value, incomingVectorClock=None):
+    def update(self, key, value, incomingVectorClock):
+        log.debug(f"Updating {key} to {value} with {incomingVectorClock}")
+
         if incomingVectorClock is not None and not incomingVectorClock.is_casually_after(self.vectorClock):
             return False
 
-        self.__dict[key] = value
         self.vectorClock.update(incomingVectorClock)
+
+        if value is None:
+            del self.__dict[key]
+        else:
+            self.__dict[key] = value
+
+        self.vectorClock[self.currentAddress] += 1
 
         return True
 
-    def get(self, key):
+    def get(self, key, incomingVectorClock):
+        log.debug(f"Getting {key} with {incomingVectorClock}")
+
+        if incomingVectorClock is not None and not incomingVectorClock.is_casually_after(self.vectorClock):
+            return False
+
         return self.__dict[key]
 
     @property

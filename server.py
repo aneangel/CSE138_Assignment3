@@ -1,8 +1,9 @@
 from flask import Flask, request, jsonify, abort
+import logging
 import requests
 import time
 import os
-import asyncio
+import sys
 from lib.KVStore import KVStore, VectorClock
 
 replica = Flask(__name__)
@@ -18,6 +19,14 @@ LONG_POLLING_WAIT = 1
 
 # Initialize KV Store
 global_kv_store = KVStore(CURRENT_ADDRESS)
+
+# Initialize logger
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+replica.logger.handlers.clear()
+replica.logger.addHandler(handler)
+replica.logger.setLevel(logging.DEBUG)
 
 
 # Error Handling
@@ -69,7 +78,7 @@ def validate_key_exists(key: str) -> None:
         abort(404, "Key does not exist")
 
 
-async def poll(address) -> None:
+def poll(address) -> None:
     """
     Polls offline replicas to check if they are back up.
     """
@@ -117,7 +126,7 @@ async def poll(address) -> None:
             abort(
                 500, f"Unexpected error will long-polling Replica {address}: {e}")
         finally:
-            asyncio.seep(LONG_POLLING_WAIT)
+            time.seep(LONG_POLLING_WAIT)
 
 
 # Helper Functions
@@ -374,4 +383,4 @@ if __name__ == '__main__':
     port = int(CURRENT_ADDRESS.split(':')[1])
     host = CURRENT_ADDRESS.split(':')[0]
 
-    asyncio.run(replica.run(debug=True, port=port, host=host))
+    replica.run(debug=True, port=port, host=host)
