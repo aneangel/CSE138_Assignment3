@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, abort
 import requests
 import time
 import os
+import asyncio
 from lib.KVStore import KVStore, VectorClock
 
 replica = Flask(__name__)
@@ -13,7 +14,7 @@ CURRENT_ADDRESS = os.environ.get('SOCKET_ADDRESS', '')
 
 # Constants
 CONNECTION_TIMEOUT = 5
-LONG_POLLING_WAIT = 3
+LONG_POLLING_WAIT = 1
 
 # Initialize KV Store
 global_kv_store = KVStore(CURRENT_ADDRESS)
@@ -68,6 +69,57 @@ def validate_key_exists(key: str) -> None:
         abort(404, "Key does not exist")
 
 
+async def poll(address) -> None:
+    """
+    Polls offline replicas to check if they are back up.
+    """
+    global VIEW
+
+    while True:
+        try:
+            replica.logger.debug(
+                f"Attempting to reach replica {address}")
+
+            # Check if replica is back up
+            response = requests.get(
+                f"http://{address}/view", timeout=(CONNECTION_TIMEOUT, None))
+            response.raise_for_status()
+
+            replica.logger.info(
+                f"Successfully reached replica {address} again")
+
+            # Add replica back to view
+            VIEW.append(address)
+            addresses = VIEW.copy()
+            addresses = address.remove(CURRENT_ADDRESS)
+            addresses.remove(address)
+
+            def putRequest(address): return requests.put(
+                f"http://{address}/view",
+                params={"nobroadcast": True},
+                headers={"Content-Type": "application/json"},
+                json={"socket-address": address}
+            )
+
+            brodcast(addresses, putRequest)
+
+        except requests.exceptions.ConnectionError as e:
+            replica.logger.debug(
+                f"Could not reach replica {address} again")
+            time.sleep(LONG_POLLING_WAIT)
+
+        except requests.exceptions.RequestException as e:
+            print(
+                f"Unexpected error while trying to reach '{address}' with error code {e.status_code}: {e}")
+
+        except Exception as e:
+            replica.logger.error("Unexpected error: %s", e)
+            abort(
+                500, f"Unexpected error will long-polling Replica {address}: {e}")
+        finally:
+            asyncio.seep(LONG_POLLING_WAIT)
+
+
 # Helper Functions
 def handleUnreachableReplica(deleteAddress: str) -> None:
     """
@@ -83,16 +135,19 @@ def handleUnreachableReplica(deleteAddress: str) -> None:
 
     VIEW.remove(deleteAddress)
 
-    addresses = VIEW.copy().remove(CURRENT_ADDRESS)
+    addresses = VIEW.copy()
+    addresses.remove(CURRENT_ADDRESS)
 
-    def request(address): return requests.delete(
+    def delRequest(address): return requests.delete(
         f"http://{address}/view",
         params={"nobroadcast": True},
         headers={"Content-Type": "application/json"},
         json={"socket-address": deleteAddress}
     )
 
-    brodcast(addresses, request)
+    brodcast(addresses, delRequest)
+
+    # Start polling for replica to come back up
 
 
 def brodcast(addresses, request):
@@ -261,6 +316,7 @@ def getKey(key):
 
     validate_key_exists(key)
 
+    # TODO: move inside KVStore
     # Check if causal dependencies are satisfied
     if not incomingVectorClock.is_casually_after(global_kv_store.vectorClock):
         abort(503, "Causal dependencies not satisfied; try again later")
@@ -315,5 +371,7 @@ def getKVStore():
 
 # Main
 if __name__ == '__main__':
-    replica.run(debug=True, port=int(CURRENT_ADDRESS.split(
-        ':')[1]), host=CURRENT_ADDRESS.split(':')[0])
+    port = int(CURRENT_ADDRESS.split(':')[1])
+    host = CURRENT_ADDRESS.split(':')[0]
+
+    asyncio.run(replica.run(debug=True, port=port, host=host))
